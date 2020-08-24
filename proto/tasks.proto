@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package taskstub;
+
+service TasksCore {
+  // Create a new task (producer)
+  rpc Create(CreateRequest) returns (Task) {}
+
+  // Acknowledge that a task was processed (consumer)
+  rpc Acknowledge(AcknowledgeRequest) returns (Empty) {}
+
+  // Worker that connects to process tasks (consumer)
+  rpc Fetch(Worker) returns (stream Task) {}
+}
+
+// Create Request
+message CreateRequest {
+  Task task = 1;
+}
+
+// Acknowledge Request
+message AcknowledgeRequest {
+  string task_id = 1;
+  TaskStatus status = 2; 
+}
+
+// Worker details
+message Worker {
+  string hostname = 1;
+  string kind = 2;
+  string queue = 3;
+  repeated string label = 4;
+}
+
+// Task
+message Task {
+  string id = 1;
+  string kind = 2;
+  string queue = 3;
+  string data = 4;
+}
+
+// Task status
+enum TaskStatus {
+  DONE = 0;
+  CANCELED = 1;
+  FAILED = 2;
+}
+
+// Empty response
+message Empty {}
