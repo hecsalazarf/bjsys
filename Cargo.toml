@@ -1,19 +1,5 @@
-[package]
-name = "bjsys"
-version = "0.1.0"
-authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-tonic = "0.3.1"
-prost = "0.6.1"
-tokio = { version = "0.2.22", features = ["macros", "sync", "stream", "time"] }
-async-stream = "0.3.0"
-tracing = "0.1.19"
-tracing-subscriber = "0.2.11"
-redis = "0.17.0"
-
-[build-dependencies]
-tonic-build = "0.3.1"
+members = [
+  "server",
+]

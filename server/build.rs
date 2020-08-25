@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 const OUT_DIR: &'static str = "src/service/stub/";
-const PROTO_DIR: &'static str = "proto/";
+const PROTO_DIR: &'static str = "../proto/";
 
 fn main() {
   // Read proto files from PROTO_DIR
