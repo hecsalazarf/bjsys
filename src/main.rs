@@ -1,15 +1,10 @@
-mod service;
-mod tracing;
+pub mod service;
+mod app;
 
-use service::TasksService;
-use tonic::transport::Server;
+use app::App;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  tracing::install();
-  Server::builder()
-    .add_service(TasksService::new().await)
-    .serve("0.0.0.0:11000".parse().unwrap())
-    .await?;
-  Ok(())
+async fn main() {
+  let app = App::build().await;
+  app.with_tracing().listen().await;
 }

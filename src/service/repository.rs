@@ -1,6 +1,5 @@
 use super::stub::tasks::Task;
 use redis::AsyncCommands;
-use tracing::error;
 
 const WAITING_SUFFIX: &'static str = "waiting";
 
@@ -16,16 +15,9 @@ pub struct TasksRepository {
 }
 
 impl TasksRepository {
-  pub async fn connect(params: &str) -> Self {
-    let connection = get_connection(params).await;
-    if let Err(e) = &connection {
-      error!("{}", e);
-      std::process::exit(1);
-    }
-
-    TasksRepository {
-      conn: connection.unwrap(),
-    }
+  pub async fn connect(params: &str) -> Result<Self, redis::RedisError> {
+    let conn = redis::Client::open(params)?.get_async_connection().await?;
+    Ok(TasksRepository { conn })
   }
 }
 
@@ -40,9 +32,4 @@ impl TasksStorage for TasksRepository {
       .xadd(&key, "*", &[("kind", &task.kind), ("data", &task.data)])
       .await
   }
-}
-
-async fn get_connection(params: &str) -> redis::RedisResult<redis::aio::Connection> {
-  let client = redis::Client::open(params)?;
-  client.get_async_connection().await
 }

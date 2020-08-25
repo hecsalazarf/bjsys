@@ -1,5 +1,5 @@
 mod repository;
-mod stub;
+pub mod stub;
 
 use std::pin::Pin;
 use std::result::Result as StdResult;
@@ -15,11 +15,11 @@ pub struct TasksService {
 }
 
 impl TasksService {
-  pub async fn new() -> TasksCoreServer<Self> {
-    let repository = TasksRepository::connect("redis://127.0.0.1:6380/").await;
-    TasksCoreServer::new(TasksService {
+  pub async fn new() -> StdResult<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
+    let repository = TasksRepository::connect("redis://127.0.0.1:6380/").await?;
+    Ok(TasksCoreServer::new(TasksService {
       repository: Mutex::new(repository),
-    })
+    }))
   }
 }
 
