@@ -1,0 +1,18 @@
+[package]
+name = "client"
+version = "0.1.0"
+authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
+edition = "2018"
+
+[dependencies]
+tonic = "0.3.1"
+prost = "0.6.1"
+tokio = { version = "0.2.22", features = ["sync", "stream", "time"] }
+async-stream = "0.3.0"
+tracing = "0.1.19"
+
+[dev-dependencies]
+tokio = { version = "0.2.22", features = ["macros"] }
+
+[build-dependencies]
+proto = { path = "../proto" }
