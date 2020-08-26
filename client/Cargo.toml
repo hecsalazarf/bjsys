@@ -10,6 +10,8 @@ prost = "0.6.1"
 tokio = { version = "0.2.22", features = ["sync", "stream", "time"] }
 async-stream = "0.3.0"
 tracing = "0.1.19"
+serde = { version = "1.0.115", default-features = false, features = ["serde_derive"] }
+serde_json = "1.0.57"
 
 [dev-dependencies]
 tokio = { version = "0.2.22", features = ["macros"] }

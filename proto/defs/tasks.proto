@@ -4,7 +4,7 @@ package taskstub;
 
 service TasksCore {
   // Create a new task (producer)
-  rpc Create(CreateRequest) returns (Task) {}
+  rpc Create(CreateRequest) returns (CreateResponse) {}
 
   // Acknowledge that a task was processed (consumer)
   rpc Acknowledge(AcknowledgeRequest) returns (Empty) {}
@@ -16,6 +16,11 @@ service TasksCore {
 // Create Request
 message CreateRequest {
   Task task = 1;
+}
+
+// Create Response
+message CreateResponse {
+  string task_id = 1;
 }
 
 // Acknowledge Request

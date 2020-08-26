@@ -1,8 +1,11 @@
+use crate::task::Task;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
+use crate::taskstub::CreateRequest;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
 
 pub use tonic::transport::Error as ChannelError;
+pub use tonic::{Request, Status as ChannelStatus};
 
 #[derive(Debug)]
 pub struct QueueBuilder {
@@ -48,6 +51,20 @@ pub struct Queue {
 impl Queue {
   pub fn configure() -> QueueBuilder {
     QueueBuilder::default()
+  }
+
+  pub async fn add(&mut self, task: Task) -> Result<String, ChannelStatus> {
+    let request = CreateRequest {
+      task: Some(task.into_stub(&self.name)),
+    };
+
+    Ok(self
+      .client
+      .create(Request::new(request))
+      .await?
+      .into_inner()
+      .task_id
+    )
   }
 }
 

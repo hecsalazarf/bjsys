@@ -4,6 +4,12 @@ pub struct CreateRequest {
   #[prost(message, optional, tag = "1")]
   pub task: ::std::option::Option<Task>,
 }
+/// Create Response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateResponse {
+  #[prost(string, tag = "1")]
+  pub task_id: std::string::String,
+}
 /// Acknowledge Request
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AcknowledgeRequest {
@@ -84,7 +90,7 @@ pub mod tasks_core_client {
     pub async fn create(
       &mut self,
       request: impl tonic::IntoRequest<super::CreateRequest>,
-    ) -> Result<tonic::Response<super::Task>, tonic::Status> {
+    ) -> Result<tonic::Response<super::CreateResponse>, tonic::Status> {
       self.inner.ready().await.map_err(|e| {
         tonic::Status::new(
           tonic::Code::Unknown,
