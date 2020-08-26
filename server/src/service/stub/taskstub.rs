@@ -4,6 +4,12 @@ pub struct CreateRequest {
   #[prost(message, optional, tag = "1")]
   pub task: ::std::option::Option<Task>,
 }
+/// Create Response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateResponse {
+  #[prost(string, tag = "1")]
+  pub task_id: std::string::String,
+}
 /// Acknowledge Request
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AcknowledgeRequest {
@@ -58,7 +64,7 @@ pub mod tasks_core_server {
     async fn create(
       &self,
       request: tonic::Request<super::CreateRequest>,
-    ) -> Result<tonic::Response<super::Task>, tonic::Status>;
+    ) -> Result<tonic::Response<super::CreateResponse>, tonic::Status>;
     #[doc = " Acknowledge that a task was processed (consumer)"]
     async fn acknowledge(
       &self,
@@ -108,7 +114,7 @@ pub mod tasks_core_server {
           #[allow(non_camel_case_types)]
           struct CreateSvc<T: TasksCore>(pub Arc<T>);
           impl<T: TasksCore> tonic::server::UnaryService<super::CreateRequest> for CreateSvc<T> {
-            type Response = super::Task;
+            type Response = super::CreateResponse;
             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
             fn call(&mut self, request: tonic::Request<super::CreateRequest>) -> Self::Future {
               let inner = self.0.clone();

@@ -1,6 +1,8 @@
 use super::stub::tasks::Task;
 use redis::AsyncCommands;
 
+pub use redis::RedisError as DbError;
+
 const WAITING_SUFFIX: &'static str = "waiting";
 
 #[tonic::async_trait]
@@ -24,7 +26,7 @@ impl TasksRepository {
 #[tonic::async_trait]
 impl TasksStorage for TasksRepository {
   type CreateResult = String;
-  type ErrorResult = redis::RedisError;
+  type ErrorResult = DbError;
   async fn create(&mut self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult> {
     let key = format!("{}_{}", task.queue, WAITING_SUFFIX);
     self
