@@ -857,6 +857,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "proto"
+version = "0.1.0"
+dependencies = [
+ "tonic-build",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1012,10 +1019,10 @@ version = "0.1.0"
 dependencies = [
  "async-stream 0.3.0",
  "prost",
+ "proto",
  "redis",
  "tokio",
  "tonic",
- "tonic-build",
  "tracing",
  "tracing-subscriber",
 ]
