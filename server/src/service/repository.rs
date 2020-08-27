@@ -3,7 +3,7 @@ use redis::AsyncCommands;
 
 pub use redis::RedisError as DbError;
 
-const WAITING_SUFFIX: &'static str = "waiting";
+const WAITING_SUFFIX: &str = "waiting";
 
 #[tonic::async_trait]
 pub trait TasksStorage {

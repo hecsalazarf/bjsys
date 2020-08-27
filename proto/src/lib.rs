@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const PROTO_DIR: &'static str = "proto/defs/";
+const PROTO_DIR: &str = "proto/defs/";
 
 pub struct Proto {
   builder: tonic_build::Builder,

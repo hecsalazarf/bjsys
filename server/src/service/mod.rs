@@ -31,7 +31,7 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 impl TasksCore for TasksService {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     let task = request.into_inner().task;
-    if let None = task {
+    if task.is_none() {
       return Err(Status::invalid_argument("No task defined"));
     }
 

@@ -58,12 +58,13 @@ impl Queue {
       task: Some(task.into_stub(&self.name)),
     };
 
-    Ok(self
-      .client
-      .create(Request::new(request))
-      .await?
-      .into_inner()
-      .task_id
+    Ok(
+      self
+        .client
+        .create(Request::new(request))
+        .await?
+        .into_inner()
+        .task_id,
     )
   }
 }

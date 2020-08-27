@@ -46,9 +46,9 @@ impl Task {
     T: Into<String>,
   {
     TaskStub {
-      id: self.id.unwrap_or_else(|| String::new()),
+      id: self.id.unwrap_or_else(String::new),
       kind: self.kind,
-      data: self.data.unwrap_or_else(|| String::new()),
+      data: self.data.unwrap_or_else(String::new),
       queue: queue.into(),
     }
   }
