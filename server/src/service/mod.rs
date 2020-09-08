@@ -3,7 +3,7 @@ pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
 use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Task, Worker};
-use tokio::{stream::Stream, sync::Mutex};
+use tokio::stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
@@ -13,14 +13,14 @@ pub struct TasksService {
   // Wrap repository inside a Mutex as it needs to be mutable
   // due to redis crate implementation, but trait definition
   // does not allow mutable references
-  repository: Mutex<TasksRepository>,
+  repository: TasksRepository,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
     let repository = TasksRepository::connect("redis://127.0.0.1:6380/").await?;
     Ok(TasksCoreServer::new(TasksService {
-      repository: Mutex::new(repository),
+      repository,
     }))
   }
 }
@@ -37,8 +37,6 @@ impl TasksCore for TasksService {
 
     self
       .repository
-      .lock()
-      .await
       .create(task.unwrap())
       .await
       .map(|r| {

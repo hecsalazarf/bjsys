@@ -9,16 +9,18 @@ const WAITING_SUFFIX: &str = "waiting";
 pub trait TasksStorage {
   type CreateResult: Send + Sized;
   type ErrorResult: std::error::Error;
-  async fn create(&mut self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult>;
+  async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult>;
 }
 
 pub struct TasksRepository {
-  conn: redis::aio::Connection,
+  conn: redis::aio::MultiplexedConnection,
 }
 
 impl TasksRepository {
   pub async fn connect(params: &str) -> Result<Self, redis::RedisError> {
-    let conn = redis::Client::open(params)?.get_async_connection().await?;
+    let conn = redis::Client::open(params)?
+      .get_multiplexed_async_connection()
+      .await?;
     Ok(TasksRepository { conn })
   }
 }
@@ -27,10 +29,13 @@ impl TasksRepository {
 impl TasksStorage for TasksRepository {
   type CreateResult = String;
   type ErrorResult = DbError;
-  async fn create(&mut self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult> {
+  async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult> {
     let key = format!("{}_{}", task.queue, WAITING_SUFFIX);
     self
       .conn
+      // Cloning allows to send requests concurrently on the same
+      // (tcp/unix socket) connection
+      .clone()
       .xadd(&key, "*", &[("kind", &task.kind), ("data", &task.data)])
       .await
   }
