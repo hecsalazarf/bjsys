@@ -10,9 +10,6 @@ use tracing::{error, info};
 use repository::{TasksRepository, TasksStorage};
 
 pub struct TasksService {
-  // Wrap repository inside a Mutex as it needs to be mutable
-  // due to redis crate implementation, but trait definition
-  // does not allow mutable references
   repository: TasksRepository,
 }
 
