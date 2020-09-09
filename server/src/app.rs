@@ -21,7 +21,7 @@ impl App {
     }
   }
 
-  pub fn with_tracing(self) -> Self {
+  pub async fn with_tracing() -> Self {
     let filter = EnvFilter::try_from_default_env()
       .unwrap_or_else(|_| EnvFilter::from_env("").add_directive(LevelFilter::INFO.into()));
 
@@ -31,7 +31,7 @@ impl App {
       .with_thread_names(true)
       .init();
 
-    self
+    Self::build().await
   }
 
   pub async fn listen(self) {

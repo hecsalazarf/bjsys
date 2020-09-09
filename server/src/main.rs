@@ -5,6 +5,6 @@ use app::App;
 
 #[tokio::main]
 async fn main() {
-  let app = App::build().await;
-  app.with_tracing().listen().await;
+  let app = App::with_tracing().await;
+  app.listen().await;
 }
