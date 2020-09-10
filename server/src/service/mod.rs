@@ -1,23 +1,28 @@
 mod repository;
+mod dispatcher;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
 use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Task, Worker};
-use tokio::stream::Stream;
+use tokio::sync::{mpsc};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use repository::{TasksRepository, TasksStorage};
+use dispatcher::Dispatcher;
 
 pub struct TasksService {
   repository: TasksRepository,
+  dispatcher: Dispatcher,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
     let repository = TasksRepository::connect("redis://127.0.0.1:6380/").await?;
+    let dispatcher = Dispatcher::new().await?;
     Ok(TasksCoreServer::new(TasksService {
       repository,
+      dispatcher,
     }))
   }
 }
@@ -50,9 +55,9 @@ impl TasksCore for TasksService {
     Err(Status::unimplemented(""))
   }
 
-  type FetchStream =
-    std::pin::Pin<Box<dyn Stream<Item = Result<Task, Status>> + Send + Sync + 'static>>;
-  async fn fetch(&self, _request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
-    Err(Status::unimplemented(""))
+  type FetchStream = mpsc::Receiver<Result<Task, Status>>;
+  async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
+    let recv = self.dispatcher.dispatch(request.into_inner()).await;
+    Ok(Response::new(recv))
   }
 }
