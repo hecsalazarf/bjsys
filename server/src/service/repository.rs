@@ -26,30 +26,39 @@ pub trait TasksStorage {
   async fn wait_for_incoming(&self, queue: &str, consumer: &str) -> Result<Task, Self::Error>;
 }
 
+pub struct Connection {
+  pub id: usize,
+  pub inner: MultiplexedConnection,
+}
+
+impl Connection {
+  async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, redis::RedisError> {
+    let mut inner = redis::Client::open(conn_info)?
+      .get_multiplexed_async_connection()
+      .await?;
+    let id = redis::cmd("CLIENT")
+      .arg("ID")
+      .query_async(&mut inner)
+      .await?;
+
+    Ok(Self { id, inner })
+  }
+}
+
 pub struct TasksRepository {
-  conn: MultiplexedConnection,
+  conn: Connection,
 }
 
 impl TasksRepository {
   pub async fn connect<T: IntoConnectionInfo>(params: T) -> Result<Self, redis::RedisError> {
-    let conn = redis::Client::open(params)?
-      .get_multiplexed_async_connection()
-      .await?;
+    let conn = Connection::start(params).await?;
     Ok(TasksRepository { conn })
   }
 
   fn connection(&self) -> MultiplexedConnection {
     // Cloning allows to send requests concurrently on the same
     // (tcp/unix socket) connection
-    self.conn.clone()
-  }
-}
-
-impl Clone for TasksRepository {
-  fn clone(&self) -> Self {
-    Self {
-      conn: self.conn.clone(),
-    }
+    self.conn.inner.clone()
   }
 }
 
