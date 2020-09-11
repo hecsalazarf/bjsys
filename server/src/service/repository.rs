@@ -6,6 +6,9 @@ use redis::{
 
 pub use redis::ErrorKind as DbErrorKind;
 pub use redis::RedisError as DbError;
+pub use redis::ConnectionInfo;
+pub use redis::ConnectionAddr;
+pub use redis::IntoConnectionInfo;
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
@@ -35,7 +38,7 @@ pub struct TasksRepository {
 }
 
 impl TasksRepository {
-  pub async fn connect(params: &str) -> Result<Self, redis::RedisError> {
+  pub async fn connect<T: IntoConnectionInfo>(params: T) -> Result<Self, redis::RedisError> {
     let conn = redis::Client::open(params)?
       .get_multiplexed_async_connection()
       .await?;
