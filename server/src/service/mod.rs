@@ -57,7 +57,12 @@ impl TasksCore for TasksService {
 
   type FetchStream = mpsc::Receiver<Result<Task, Status>>;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
-    let recv = self.dispatcher.dispatch(request.into_inner()).await;
-    Ok(Response::new(recv))
+    let worker = request.get_ref();
+    self.dispatcher.start_queue(&worker.queue).await?;
+    info!("started");
+    let tasks_stream = self.dispatcher.get_tasks(worker).await;
+    
+    info!("Client {} connected", worker.hostname);
+    Ok(Response::new(tasks_stream))
   }
 }

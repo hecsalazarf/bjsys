@@ -1,9 +1,11 @@
 use super::stub::tasks::Task;
-use redis::AsyncCommands;
-// use redis::streams::StreamPendingId;
+use redis::{
+  streams::{StreamPendingCountReply, StreamRangeReply, StreamReadOptions, StreamReadReply},
+  AsyncCommands,
+};
 
-pub use redis::RedisError as DbError;
 pub use redis::ErrorKind as DbErrorKind;
+pub use redis::RedisError as DbError;
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
@@ -13,9 +15,19 @@ pub trait TasksStorage {
   type CreateResult: Send + Sized;
   type ErrorResult: std::error::Error;
   type PendingResult: Send + Sized;
+  type WaitIncoming: Send + Sized;
   async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult>;
   async fn create_queue(&self, queue: &str) -> Result<Self::CreateResult, Self::ErrorResult>;
-  async fn pending(&self, queue: &str, consumer: &str) -> Result<Self::PendingResult, Self::ErrorResult>;
+  async fn pending(
+    &self,
+    queue: &str,
+    consumer: &str,
+  ) -> Result<Self::PendingResult, Self::ErrorResult>;
+  async fn wait_for_incoming(
+    &self,
+    queue: &str,
+    consumer: &str,
+  ) -> Result<Self::WaitIncoming, Self::ErrorResult>;
 }
 
 pub struct TasksRepository {
@@ -31,11 +43,20 @@ impl TasksRepository {
   }
 }
 
+impl Clone for TasksRepository {
+  fn clone(&self) -> Self {
+    Self {
+      conn: self.conn.clone(),
+    }
+  }
+}
+
 #[tonic::async_trait]
 impl TasksStorage for TasksRepository {
   type CreateResult = String;
   type ErrorResult = DbError;
-  type PendingResult = redis::streams::StreamRangeReply;
+  type PendingResult = StreamRangeReply;
+  type WaitIncoming = StreamReadReply;
   async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::ErrorResult> {
     let key = format!("{}_{}", task.queue, PENDING_SUFFIX);
     self
@@ -56,20 +77,37 @@ impl TasksStorage for TasksRepository {
       .await
   }
 
-  async fn pending(&self, queue: &str, consumer: &str) -> Result<Self::PendingResult, Self::ErrorResult> {
-    let key = format!("{}_{}", queue, PENDING_SUFFIX);
-    let key = &key;
+  async fn pending(
+    &self,
+    queue: &str,
+    consumer: &str,
+  ) -> Result<Self::PendingResult, Self::ErrorResult> {
+    let key = &format!("{}_{}", queue, PENDING_SUFFIX);
     let mut conn = self.conn.clone();
-    let mut res: redis::streams::StreamPendingCountReply = conn
+    let mut res: StreamPendingCountReply = conn
       .xpending_consumer_count(key, DEFAULT_GROUP, "-", "+", 1, consumer)
       .await?;
-    
+    // TODO: Create lua script to avoid double request
     if let Some(t) = res.ids.pop() {
-      return conn
-        .xrange(key, &t.id, &t.id)
-        .await;
+      conn.xrange(key, &t.id, &t.id).await
     } else {
-      return Err(DbError::from((DbErrorKind::ExtensionError, "")))
+      Ok(StreamRangeReply::default())
     }
+  }
+
+  async fn wait_for_incoming(
+    &self,
+    queue: &str,
+    consumer: &str,
+  ) -> Result<Self::WaitIncoming, Self::ErrorResult> {
+    let key = &format!("{}_{}", queue, PENDING_SUFFIX);
+    let mut conn = self.conn.clone();
+
+    let opts = StreamReadOptions::default()
+      .block(0)
+      .count(1)
+      .group(DEFAULT_GROUP, consumer);
+    
+      conn.xread_options(&[key], &[">"], opts).await
   }
 }
