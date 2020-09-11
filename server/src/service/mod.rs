@@ -1,15 +1,15 @@
-mod repository;
 mod dispatcher;
+mod repository;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
 use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Task, Worker};
-use tokio::sync::{mpsc};
+use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
-use repository::{TasksRepository, TasksStorage, ConnectionInfo, ConnectionAddr};
 use dispatcher::Dispatcher;
+use repository::{ConnectionAddr, ConnectionInfo, TasksRepository, TasksStorage};
 
 pub struct TasksService {
   conn_info: ConnectionInfo,
@@ -27,11 +27,8 @@ impl TasksService {
     };
 
     let repo = TasksRepository::connect(conn_info.clone()).await?;
-    
-    Ok(TasksCoreServer::new(TasksService {
-      conn_info,
-      repo,
-    }))
+
+    Ok(TasksCoreServer::new(TasksService { conn_info, repo }))
   }
 }
 
@@ -65,12 +62,17 @@ impl TasksCore for TasksService {
 
   type FetchStream = mpsc::Receiver<Result<Task, Status>>;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
-    let dispatcher = Dispatcher::new(self.conn_info.clone()).await.expect("Cannot create dispatcher");
     let worker = request.get_ref();
-    dispatcher.start_queue(&worker.queue).await?;
-    info!("started");
-    let tasks_stream = dispatcher.get_tasks(worker).await;
+    let dispatcher = Dispatcher::new(
+      self.conn_info.clone(),
+      worker.queue.clone(),
+      worker.hostname.clone(),
+    )
+    .await
+    .expect("Cannot create dispatcher");
     
+    dispatcher.start_queue(&worker.queue).await?;
+    let tasks_stream = dispatcher.get_tasks().await;
     info!("Client {} connected", worker.hostname);
     Ok(Response::new(tasks_stream))
   }

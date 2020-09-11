@@ -1,6 +1,6 @@
 use super::repository::{DbErrorKind, IntoConnectionInfo, TasksRepository, TasksStorage};
-use super::stub::tasks::{Task, Worker};
-use tokio::sync::mpsc::{channel, Receiver};
+use super::stub::tasks::Task;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tonic::Status;
 use tracing::{debug, error, info};
 use xactor::{message, Actor, Addr, Context, Handler};
@@ -23,56 +23,44 @@ impl Handler<Ack> for AckManager {
 pub struct Dispatcher {
   ack_addr: Addr<AckManager>,
   repo: TasksRepository,
+  queue: String,
+  consumer: String,
 }
 
 impl Dispatcher {
   pub async fn new<T: IntoConnectionInfo>(
     conn_info: T,
+    queue: String,
+    consumer: String,
   ) -> Result<Self, Box<dyn std::error::Error>> {
     let repo = TasksRepository::connect(conn_info).await?;
     Ok(Self {
       repo,
       ack_addr: AckManager.start().await.unwrap(),
+      queue,
+      consumer,
     })
   }
-  pub async fn get_tasks(self, worker: &Worker) -> Receiver<Result<Task, Status>> {
-    let (mut tx, rx) = channel(4);
-    let queue = worker.queue.clone();
-    let hostname = worker.hostname.clone();
+
+  pub async fn get_tasks(self) -> Receiver<Result<Task, Status>> {
+    let (mut tx, rx) = channel(1);
+    // TODO: This spawned task in hung after client disconnects. We must
+    // finish it
     tokio::spawn(async move {
-      // TODO: This spawned task in hung after client disconnects. We must
-      // finish it
-      match self.repo.pending(&queue, &hostname).await {
+      match self.repo.pending(&self.queue, &self.consumer).await {
         Err(e) => {
           error!("Cannot get pending tasks {}", e);
           tx.send(Err(Status::unavailable("unavailable")))
             .await
-            .unwrap();
+            .expect("Cannot send pending error");
         }
         Ok(Some(task)) => {
-            tx.send(Ok(task)).await.unwrap();
-            self.ack_addr.call(Ack).await.unwrap();
-
-            let addr = self.ack_addr.clone();
-            let queue = queue.clone();
-            let hostname = hostname.clone();
-            loop {
-              match self.repo.wait_for_incoming(&queue, &hostname).await {
-                Err(e) => {
-                  error!("{:?}", e.kind());
-                  tx.send(Err(Status::unavailable("")))
-                    .await
-                    .expect("erro_wait_icoming");
-                }
-                Ok(task) => {
-                  tx.send(Ok(task)).await.unwrap();
-                  addr.call(Ack).await.unwrap();
-                }
-              }
-            }
+          tx.send(Ok(task)).await.expect("Cannot send pending task");
+          self.ack_addr.call(Ack).await.unwrap();
+          self.wait(tx).await;
         }
         Ok(None) => {
-          unimplemented!();
+          self.wait(tx).await;
         }
       }
     });
@@ -89,5 +77,27 @@ impl Dispatcher {
       }
     }
     Ok(())
+  }
+
+  async fn wait(self, mut tx: Sender<Result<Task, Status>>) {
+    loop {
+      match self
+        .repo
+        .wait_for_incoming(&self.queue, &self.consumer)
+        .await
+      {
+        Err(e) => {
+          error!("{:?}", e.kind());
+          tx.send(Err(Status::unavailable("")))
+            .await
+            .expect("erro_wait_incoming");
+        }
+        Ok(task) => {
+          // TODO: This will panick for hung threads. We must exit from loop
+          tx.send(Ok(task)).await.expect("Cannot send incoming task");
+          self.ack_addr.call(Ack).await.unwrap();
+        }
+      }
+    }
   }
 }
