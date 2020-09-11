@@ -49,23 +49,13 @@ impl Dispatcher {
             .await
             .unwrap();
         }
-        Ok(mut r) => {
-          if let Some(t) = r.ids.pop() {
-            let task = Task {
-              id: t.id.clone(),
-              kind: t.get("kind").unwrap(),
-              queue: String::new(),
-              data: t.get("data").unwrap(),
-            };
-            let addr = self.ack_addr.clone();
+        Ok(Some(task)) => {
             tx.send(Ok(task)).await.unwrap();
+            self.ack_addr.call(Ack).await.unwrap();
 
+            let addr = self.ack_addr.clone();
             let queue = queue.clone();
             let hostname = hostname.clone();
-            if true {
-              // check comes from pending
-              addr.call(Ack).await.unwrap();
-            }
             loop {
               match self.repo.wait_for_incoming(&queue, &hostname).await {
                 Err(e) => {
@@ -74,21 +64,15 @@ impl Dispatcher {
                     .await
                     .expect("erro_wait_icoming");
                 }
-                Ok(mut res) => {
-                  let mut t = res.keys.pop().unwrap();
-                  let t = t.ids.pop().unwrap();
-                  let task = Task {
-                    id: t.id.clone(),
-                    kind: t.get("kind").unwrap(),
-                    queue: queue.clone(),
-                    data: t.get("data").unwrap(),
-                  };
+                Ok(task) => {
                   tx.send(Ok(task)).await.unwrap();
                   addr.call(Ack).await.unwrap();
                 }
               }
             }
-          }
+        }
+        Ok(None) => {
+          unimplemented!();
         }
       }
     });
