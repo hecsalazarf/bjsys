@@ -3,12 +3,11 @@ mod repository;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Task, Worker};
-use tokio::sync::mpsc;
+use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Worker};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
-use dispatcher::Dispatcher;
+use dispatcher::{Dispatcher, TaskStream};
 use repository::{ConnectionAddr, ConnectionInfo, TasksRepository, TasksStorage};
 
 pub struct TasksService {
@@ -60,7 +59,7 @@ impl TasksCore for TasksService {
     Err(Status::unimplemented(""))
   }
 
-  type FetchStream = mpsc::Receiver<Result<Task, Status>>;
+  type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
     let worker = request.get_ref();
     let dispatcher = Dispatcher::new(
@@ -73,7 +72,7 @@ impl TasksCore for TasksService {
     
     dispatcher.start_queue(&worker.queue).await?;
     let tasks_stream = dispatcher.get_tasks().await;
-    info!("Client {} connected", worker.hostname);
+    info!("Client \"{}\" connected", worker.hostname);
     Ok(Response::new(tasks_stream))
   }
 }

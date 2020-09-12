@@ -32,7 +32,7 @@ pub struct Connection {
 }
 
 impl Connection {
-  async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, redis::RedisError> {
+  pub async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, redis::RedisError> {
     let mut inner = redis::Client::open(conn_info)?
       .get_multiplexed_async_connection()
       .await?;
@@ -55,6 +55,10 @@ impl TasksRepository {
     Ok(TasksRepository { conn })
   }
 
+  pub fn conn_id(&self) -> usize {
+    self.conn.id
+  }
+  
   fn connection(&self) -> MultiplexedConnection {
     // Cloning allows to send requests concurrently on the same
     // (tcp/unix socket) connection
