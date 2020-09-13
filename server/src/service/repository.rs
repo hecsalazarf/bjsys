@@ -26,6 +26,7 @@ pub trait TasksStorage {
   async fn wait_for_incoming(&self, queue: &str, consumer: &str) -> Result<Task, Self::Error>;
 }
 
+#[derive(Clone)]
 pub struct Connection {
   pub id: usize,
   pub inner: MultiplexedConnection,
@@ -45,6 +46,7 @@ impl Connection {
   }
 }
 
+#[derive(Clone)]
 pub struct TasksRepository {
   conn: Connection,
 }
