@@ -1,5 +1,5 @@
 mod dispatcher;
-mod repository;
+mod store;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
@@ -8,12 +8,12 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use dispatcher::{Dispatcher, TaskStream};
-use repository::{ConnectionAddr, ConnectionInfo, TasksRepository, TasksStorage};
+use store::{ConnectionAddr, ConnectionInfo, Store, Storage};
 
 pub struct TasksService {
   conn_info: ConnectionInfo,
-  // This repo must be used ONLY for non-blocking operations
-  repo: TasksRepository,
+  // This store must be used ONLY for non-blocking operations
+  store: Store,
 }
 
 impl TasksService {
@@ -25,9 +25,9 @@ impl TasksService {
       passwd: None,
     };
 
-    let repo = TasksRepository::connect(conn_info.clone()).await?;
+    let store = Store::new().connect(conn_info.clone()).await?;
 
-    Ok(TasksCoreServer::new(TasksService { conn_info, repo }))
+    Ok(TasksCoreServer::new(TasksService { conn_info, store }))
   }
 }
 
@@ -42,8 +42,8 @@ impl TasksCore for TasksService {
     }
 
     self
-      .repo
-      .create(task.unwrap())
+      .store
+      .create_task(task.unwrap())
       .await
       .map(|r| {
         info!("Task created with id {}", r);
@@ -62,7 +62,7 @@ impl TasksCore for TasksService {
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
     let worker = request.get_ref();
-    let dispatcher = Dispatcher::new(
+    let dispatcher = Dispatcher::init(
       self.conn_info.clone(),
       worker.queue.clone(),
       worker.hostname.clone(),

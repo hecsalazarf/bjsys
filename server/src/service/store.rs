@@ -6,24 +6,25 @@ use redis::{
   },
   AsyncCommands,
 };
+use std::sync::Arc;
 
 pub use redis::ConnectionAddr;
 pub use redis::ConnectionInfo;
-pub use redis::ErrorKind as DbErrorKind;
+pub use redis::ErrorKind as StoreErrorKind;
 pub use redis::IntoConnectionInfo;
-pub use redis::RedisError as DbError;
+pub use redis::RedisError as StoreError;
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
 
 #[tonic::async_trait]
-pub trait TasksStorage {
+pub trait Storage {
   type CreateResult: Send + Sized;
   type Error: std::error::Error;
-  async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::Error>;
-  async fn create_queue(&self, queue: &str) -> Result<(), Self::Error>;
-  async fn pending(&self, queue: &str, consumer: &str) -> Result<Option<Task>, Self::Error>;
-  async fn wait_for_incoming(&self, queue: &str, consumer: &str) -> Result<Task, Self::Error>;
+  async fn create_task(&self, task: Task) -> Result<Self::CreateResult, Self::Error>;
+  async fn create_queue(&self) -> Result<(), Self::Error>;
+  async fn get_pending(&self) -> Result<Option<Task>, Self::Error>;
+  async fn collect(&self) -> Result<Task, Self::Error>;
 }
 
 #[derive(Clone)]
@@ -33,7 +34,7 @@ pub struct Connection {
 }
 
 impl Connection {
-  pub async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, redis::RedisError> {
+  pub async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, StoreError> {
     let mut inner = redis::Client::open(conn_info)?
       .get_multiplexed_async_connection()
       .await?;
@@ -46,21 +47,52 @@ impl Connection {
   }
 }
 
-#[derive(Clone)]
-pub struct TasksRepository {
-  conn: Connection,
+#[derive(Default)]
+pub struct Builder {
+  queue: String,
+  consumer: String,
+  key: String,
 }
 
-impl TasksRepository {
-  pub async fn connect<T: IntoConnectionInfo>(params: T) -> Result<Self, redis::RedisError> {
+impl Builder {
+  pub fn with_group(mut self, queue: String, consumer: String) -> Self {
+    self.key = generate_key(&queue);
+    self.queue = queue;
+    self.consumer = consumer;
+    self
+  }
+
+  pub async fn connect<T: IntoConnectionInfo>(self, params: T) -> Result<Store, StoreError> {
     let conn = Connection::start(params).await?;
-    Ok(TasksRepository { conn })
+    Ok(Store {
+      conn,
+      queue: Arc::new(self.queue),
+      consumer: Arc::new(self.consumer),
+      key: Arc::new(self.key),
+    })
+  }
+}
+
+#[derive(Clone)]
+pub struct Store {
+  conn: Connection,
+  queue: Arc<String>,
+  consumer: Arc<String>,
+  key: Arc<String>,
+}
+
+impl Store {
+  pub fn new() -> Builder {
+    Builder::default()
   }
 
   pub fn conn_id(&self) -> usize {
     self.conn.id
   }
-  
+
+  pub fn consumer(&self) -> &str {
+    self.consumer.as_ref()
+  }
   fn connection(&self) -> MultiplexedConnection {
     // Cloning allows to send requests concurrently on the same
     // (tcp/unix socket) connection
@@ -69,30 +101,29 @@ impl TasksRepository {
 }
 
 #[tonic::async_trait]
-impl TasksStorage for TasksRepository {
+impl Storage for Store {
   type CreateResult = String;
-  type Error = DbError;
-  async fn create(&self, task: Task) -> Result<Self::CreateResult, Self::Error> {
-    let key = format!("{}_{}", task.queue, PENDING_SUFFIX);
+  type Error = StoreError;
+  async fn create_task(&self, task: Task) -> Result<Self::CreateResult, Self::Error> {
+    let key = generate_key(&task.queue);
     self
       .connection()
-      .xadd(&key, "*", &[("kind", &task.kind), ("data", &task.data)])
+      .xadd(key, "*", &[("kind", &task.kind), ("data", &task.data)])
       .await
   }
 
-  async fn create_queue(&self, queue: &str) -> Result<(), Self::Error> {
-    let key = format!("{}_{}", queue, PENDING_SUFFIX);
+  async fn create_queue(&self) -> Result<(), Self::Error> {
     self
       .connection()
-      .xgroup_create_mkstream(key, DEFAULT_GROUP, 0)
+      .xgroup_create_mkstream(self.key.as_ref(), DEFAULT_GROUP, 0)
       .await
   }
 
-  async fn pending(&self, queue: &str, consumer: &str) -> Result<Option<Task>, Self::Error> {
-    let key = &format!("{}_{}", queue, PENDING_SUFFIX);
+  async fn get_pending(&self) -> Result<Option<Task>, Self::Error> {
+    let key = self.key.as_ref();
     let mut res: StreamPendingCountReply = self
       .connection()
-      .xpending_consumer_count(key, DEFAULT_GROUP, "-", "+", 1, consumer)
+      .xpending_consumer_count(key, DEFAULT_GROUP, "-", "+", 1, self.consumer.as_ref())
       .await?;
     // TODO: Create lua script to avoid double request
     if let Some(p) = res.ids.pop() {
@@ -105,17 +136,15 @@ impl TasksStorage for TasksRepository {
     Ok(None)
   }
 
-  async fn wait_for_incoming(&self, queue: &str, consumer: &str) -> Result<Task, Self::Error> {
-    let key = &format!("{}_{}", queue, PENDING_SUFFIX);
-
+  async fn collect(&self) -> Result<Task, Self::Error> {
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
-      .group(DEFAULT_GROUP, consumer);
+      .group(DEFAULT_GROUP, self.consumer.as_ref());
 
     let mut reply: StreamReadReply = self
       .connection()
-      .xread_options(&[key], &[">"], opts)
+      .xread_options(&[self.key.as_ref()], &[">"], opts)
       .await?;
     // This never panicks as we block until getting a reply, and it
     // always has one single value
@@ -137,4 +166,8 @@ impl From<StreamId> for Task {
       data,
     }
   }
+}
+
+fn generate_key(queue: &str) -> String {
+  format!("{}_{}", queue, PENDING_SUFFIX)
 }
