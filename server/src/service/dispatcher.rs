@@ -1,4 +1,4 @@
-use super::store::{Connection, IntoConnectionInfo, Storage, Store, StoreErrorKind};
+use super::store::{Connection, ConnectionInfo, Storage, Store, StoreErrorKind};
 use super::stub::tasks::Task;
 use core::task::Poll;
 use std::pin::Pin;
@@ -73,14 +73,14 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-  pub async fn init<T: IntoConnectionInfo + Clone>(
-    conn_info: T,
+  pub async fn init(
+    conn_info: ConnectionInfo,
     queue: String,
     consumer: String,
   ) -> Result<Self, Box<dyn std::error::Error>> {
-    let store = Store::new()
+    let store = Store::new(conn_info.clone())
       .with_group(queue, consumer)
-      .connect(conn_info.clone())
+      .connect()
       .await?;
 
     let master_conn = Connection::start(conn_info).await?;

@@ -4,7 +4,7 @@ use redis::{
   streams::{
     StreamId, StreamPendingCountReply, StreamRangeReply, StreamReadOptions, StreamReadReply,
   },
-  AsyncCommands,
+  AsyncCommands, Client,
 };
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ pub struct Connection {
 
 impl Connection {
   pub async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, StoreError> {
-    let mut inner = redis::Client::open(conn_info)?
+    let mut inner = Client::open(conn_info)?
       .get_multiplexed_async_connection()
       .await?;
     let id = redis::cmd("CLIENT")
@@ -52,6 +52,8 @@ pub struct Builder {
   queue: String,
   consumer: String,
   key: String,
+  conn: Option<Connection>,
+  conn_info: Option<ConnectionInfo>,
 }
 
 impl Builder {
@@ -62,8 +64,15 @@ impl Builder {
     self
   }
 
-  pub async fn connect<T: IntoConnectionInfo>(self, params: T) -> Result<Store, StoreError> {
-    let conn = Connection::start(params).await?;
+  pub async fn connect(self) -> Result<Store, StoreError> {
+    let conn: Connection;
+    if let Some(c) = self.conn {
+      conn = c;
+    } else {
+      conn = Connection::start(self.conn_info.unwrap()).await?
+    }
+    
+    
     Ok(Store {
       conn,
       queue: Arc::new(self.queue),
@@ -82,8 +91,18 @@ pub struct Store {
 }
 
 impl Store {
-  pub fn new() -> Builder {
-    Builder::default()
+  pub fn new(conn_info: ConnectionInfo) -> Builder {
+    Builder {
+      conn_info: Some(conn_info),
+      ..Builder::default()
+    }
+  }
+
+  pub fn from(conn: Connection) -> Builder {
+    Builder {
+      conn: Some(conn),
+      ..Builder::default()
+    }
   }
 
   pub fn conn_id(&self) -> usize {

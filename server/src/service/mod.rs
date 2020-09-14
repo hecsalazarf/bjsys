@@ -25,7 +25,7 @@ impl TasksService {
       passwd: None,
     };
 
-    let store = Store::new().connect(conn_info.clone()).await?;
+    let store = Store::new(conn_info.clone()).connect().await?;
 
     Ok(TasksCoreServer::new(TasksService { conn_info, store }))
   }
