@@ -4,18 +4,38 @@ use redis::{
   streams::{
     StreamId, StreamPendingCountReply, StreamRangeReply, StreamReadOptions, StreamReadReply,
   },
-  AsyncCommands, Client,
+  AsyncCommands, Client, ConnectionAddr, ConnectionInfo, RedisError as StoreError,
 };
 use std::sync::Arc;
 
-pub use redis::ConnectionAddr;
-pub use redis::ConnectionInfo;
-pub use redis::ErrorKind as StoreErrorKind;
-pub use redis::IntoConnectionInfo;
-pub use redis::RedisError as StoreError;
-
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
+
+#[derive(Clone)]
+pub struct Connection {
+  pub id: usize,
+  pub inner: MultiplexedConnection,
+}
+
+pub async fn connection() -> Result<Connection, StoreError> {
+  // TODO: Retrieve connection info from configuration
+  let conn_info = ConnectionInfo {
+    db: 0,
+    addr: Box::new(ConnectionAddr::Tcp("127.0.0.1".to_owned(), 6380)),
+    username: None,
+    passwd: None,
+  };
+
+  let mut inner = Client::open(conn_info)?
+    .get_multiplexed_async_connection()
+    .await?;
+  let id = redis::cmd("CLIENT")
+    .arg("ID")
+    .query_async(&mut inner)
+    .await?;
+
+  Ok(Connection { id, inner })
+}
 
 #[tonic::async_trait]
 pub trait Storage {
@@ -28,33 +48,12 @@ pub trait Storage {
   async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
 }
 
-#[derive(Clone)]
-pub struct Connection {
-  pub id: usize,
-  pub inner: MultiplexedConnection,
-}
-
-impl Connection {
-  pub async fn start<T: IntoConnectionInfo>(conn_info: T) -> Result<Self, StoreError> {
-    let mut inner = Client::open(conn_info)?
-      .get_multiplexed_async_connection()
-      .await?;
-    let id = redis::cmd("CLIENT")
-      .arg("ID")
-      .query_async(&mut inner)
-      .await?;
-
-    Ok(Self { id, inner })
-  }
-}
-
 #[derive(Default)]
 pub struct Builder {
   queue: String,
   consumer: String,
   key: String,
   conn: Option<Connection>,
-  conn_info: Option<ConnectionInfo>,
 }
 
 impl Builder {
@@ -70,10 +69,8 @@ impl Builder {
     if let Some(c) = self.conn {
       conn = c;
     } else {
-      conn = Connection::start(self.conn_info.unwrap()).await?
+      conn = connection().await?
     }
-    
-    
     Ok(Store {
       conn,
       queue: Arc::new(self.queue),
@@ -92,18 +89,8 @@ pub struct Store {
 }
 
 impl Store {
-  pub fn new(conn_info: ConnectionInfo) -> Builder {
-    Builder {
-      conn_info: Some(conn_info),
-      ..Builder::default()
-    }
-  }
-
-  pub fn from(conn: Connection) -> Builder {
-    Builder {
-      conn: Some(conn),
-      ..Builder::default()
-    }
+  pub fn new() -> Builder {
+    Builder::default()
   }
 
   pub fn conn_id(&self) -> usize {

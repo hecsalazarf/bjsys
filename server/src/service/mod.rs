@@ -10,10 +10,9 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{Connection, ConnectionAddr, ConnectionInfo, Storage, Store};
+use store::{Storage, Store};
 
 pub struct TasksService {
-  conn_info: ConnectionInfo,
   // This store must be used ONLY for non-blocking operations
   store: Store,
   ack_manager: AckManager,
@@ -21,21 +20,10 @@ pub struct TasksService {
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let conn_info = ConnectionInfo {
-      db: 0,
-      addr: Box::new(ConnectionAddr::Tcp("127.0.0.1".to_owned(), 6380)),
-      username: None,
-      passwd: None,
-    };
-
-    let conn = Connection::start(conn_info.clone()).await?;
-
-    let store = Store::from(conn.clone()).connect().await?;
-
+    let store = Store::new().connect().await?;
     let ack_manager = AckManager::init(store.clone()).await?;
 
     Ok(TasksCoreServer::new(TasksService {
-      conn_info,
       store,
       ack_manager,
     }))
@@ -76,14 +64,13 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
-    let consumer = request.into_inner();
     let dispatcher = Dispatcher::init(
-      self.conn_info.clone(),
-      consumer,
+      request.into_inner(),
       self.ack_manager.clone(),
     )
     .await
     .expect("Cannot create dispatcher");
+    
     dispatcher.start_queue().await?;
     info!("Client \"{}\" connected", dispatcher.consumer());
     let tasks_stream = dispatcher.get_tasks().await;

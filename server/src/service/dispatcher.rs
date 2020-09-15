@@ -1,4 +1,4 @@
-use super::store::{Connection, ConnectionInfo, Storage, Store, StoreErrorKind};
+use super::store::{connection, Storage, Store, Connection};
 use super::stub::tasks::{Task, Worker};
 use super::ack::{AckManager, WaitingTask};
 use core::task::Poll;
@@ -22,11 +22,10 @@ pub struct Dispatcher {
 
 impl Dispatcher {
   pub async fn init(
-    conn_info: ConnectionInfo,
     consumer: Worker,
     ack_manager: AckManager,
   ) -> Result<Self, Box<dyn std::error::Error>> {
-    let store = Store::new(conn_info.clone())
+    let store = Store::new()
       .for_consumer(consumer)
       .connect()
       .await?;
@@ -39,7 +38,7 @@ impl Dispatcher {
       tx_watch
     };
 
-    let master_conn = Connection::start(conn_info).await?;
+    let master_conn = connection().await?;
     Ok(Self {
       store,
       master_conn,
@@ -57,11 +56,13 @@ impl Dispatcher {
 
   pub async fn start_queue(&self) -> Result<(), Status> {
     if let Err(e) = self.store.create_queue().await {
-      if e.kind() != StoreErrorKind::ExtensionError {
-        error!("DB failed {}", e);
-        return Err(Status::unavailable("unavailable"));
-      } else {
-        debug!("Queue {} was not created, exists already", self.store.queue());
+      if let Some(c) = e.code() {
+        if c == "BUSYGROUP" {
+          debug!("Queue {} was not created, exists already", self.store.queue());
+        } else {
+          error!("DB failed {}", e);
+          return Err(Status::unavailable("unavailable"));
+        }
       }
     }
     Ok(())
