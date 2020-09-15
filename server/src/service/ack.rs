@@ -19,44 +19,43 @@ impl AckManager {
     Ok(Self { store, worker })
   }
 
-  pub async fn check(&self, req: &AcknowledgeRequest) -> Result<(), Status> {
-    self
-      .store
-      .ack(&req.task_id, &req.queue)
-      .await
-      .map(|r| {
+  pub async fn check(&self, req: AcknowledgeRequest) -> Result<(), Status> {
+    match self.store.ack(&req.task_id, &req.queue).await {
+      Ok(r) => {
         if r > 0 {
           info!("Task {} was completed", req.task_id);
           self
             .worker
-            .send(AckCmd::Done(req.task_id.clone()))
+            .send(AckCmd::Done(Arc::new(req.task_id)))
             .expect("ack_done");
         }
-      })
-      .map_err(|e| {
+        Ok(())
+      }
+      Err(e) => {
         error!("Cannot ack task {}: {}", req.task_id, e);
-        Status::unavailable("Service not available")
-      })
+        Err(Status::unavailable("Service not available"))
+      }
+    }
   }
 
-  pub fn in_process(&self, task_id: String) -> Arc<Notify> {
-    let notify = Arc::new(Notify::new());
+  pub fn in_process(&self, task_id: String) -> WaitingTask {
+    let waiting = WaitingTask::new(task_id);
     self
       .worker
-      .send(AckCmd::InProcess(task_id, notify.clone()))
+      .send(AckCmd::InProcess(waiting.clone()))
       .expect("ack_in_process");
-    notify
+    waiting
   }
 }
 
 #[message]
 enum AckCmd {
-  Done(String),
-  InProcess(String, Arc<Notify>),
+  Done(Arc<String>),
+  InProcess(WaitingTask),
 }
 
 struct AckWorker {
-  tasks: HashMap<String, Arc<Notify>>,
+  tasks: HashMap<Arc<String>, Arc<Notify>>,
 }
 
 impl AckWorker {
@@ -66,12 +65,12 @@ impl AckWorker {
     }
   }
 
-  fn in_process(&mut self, task_id: String, notify: Arc<Notify>) {
-    self.tasks.insert(task_id, notify);
+  fn in_process(&mut self, task: WaitingTask) {
+    self.tasks.insert(task.id, task.notify);
   }
 
-  fn mark_done(&mut self, task_id: &str) {
-    if let Some(n) = self.tasks.remove(task_id) {
+  fn mark_done(&mut self, task_id: Arc<String>) {
+    if let Some(n) = self.tasks.remove(&task_id) {
       info!("Notify");
       n.notify();
     }
@@ -84,8 +83,31 @@ impl Actor for AckWorker {}
 impl Handler<AckCmd> for AckWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: AckCmd) {
     match cmd {
-      AckCmd::InProcess(t, n) => self.in_process(t, n),
-      AckCmd::Done(t) => self.mark_done(&t),
+      AckCmd::InProcess(t) => self.in_process(t),
+      AckCmd::Done(t) => self.mark_done(t),
     }
+  }
+}
+
+#[derive(Clone, Debug)]
+pub struct WaitingTask {
+  id: Arc<String>,
+  notify: Arc<Notify>,
+}
+
+impl WaitingTask {
+  pub fn new(id: String) -> Self {
+    Self {
+      id: Arc::new(id),
+      notify: Arc::new(Notify::new()),
+    }
+  }
+
+  pub async fn wait_to_finish(&self) {
+    self.notify.notified().await;
+  }
+
+  pub fn finish(&self) {
+    self.notify.notify();
   }
 }

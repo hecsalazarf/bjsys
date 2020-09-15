@@ -1,4 +1,4 @@
-use super::stub::tasks::Task;
+use super::stub::tasks::{Task, Worker};
 use redis::{
   aio::MultiplexedConnection,
   streams::{
@@ -58,10 +58,10 @@ pub struct Builder {
 }
 
 impl Builder {
-  pub fn with_group(mut self, queue: String, consumer: String) -> Self {
-    self.key = generate_key(&queue);
-    self.queue = queue;
-    self.consumer = consumer;
+  pub fn for_consumer(mut self, consumer: Worker) -> Self {
+    self.key = generate_key(&consumer.queue);
+    self.queue = consumer.queue;
+    self.consumer = consumer.hostname;
     self
   }
 
@@ -113,6 +113,11 @@ impl Store {
   pub fn consumer(&self) -> &str {
     self.consumer.as_ref()
   }
+
+  pub fn queue(&self) -> &str {
+    self.queue.as_ref()
+  }
+
   fn connection(&self) -> MultiplexedConnection {
     // Cloning allows to send requests concurrently on the same
     // (tcp/unix socket) connection

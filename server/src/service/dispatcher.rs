@@ -1,15 +1,13 @@
 use super::store::{Connection, ConnectionInfo, Storage, Store, StoreErrorKind};
-use super::stub::tasks::Task;
-use super::ack::AckManager;
+use super::stub::tasks::{Task, Worker};
+use super::ack::{AckManager, WaitingTask};
 use core::task::Poll;
 use std::pin::Pin;
 use std::task::Context;
-use std::sync::Arc;
 use tokio::{
   stream::Stream,
   sync::mpsc::{channel, Receiver, Sender},
   sync::watch::{channel as watch, Receiver as WReceiver, Sender as WSender},
-  sync::Notify,
 };
 use tonic::Status;
 use tracing::{debug, error, info};
@@ -19,18 +17,17 @@ pub struct Dispatcher {
   store: Store,
   master_conn: Connection,
   worker: Addr<DispatchWorker>,
-  rx_watch: WReceiver<Option<Arc<Notify>>>,
+  rx_watch: WReceiver<Option<WaitingTask>>,
 }
 
 impl Dispatcher {
   pub async fn init(
     conn_info: ConnectionInfo,
-    queue: String,
-    consumer: String,
+    consumer: Worker,
     ack_manager: AckManager,
   ) -> Result<Self, Box<dyn std::error::Error>> {
     let store = Store::new(conn_info.clone())
-      .with_group(queue, consumer)
+      .for_consumer(consumer)
       .connect()
       .await?;
 
@@ -58,16 +55,20 @@ impl Dispatcher {
     TaskStream::new(rx, addr)
   }
 
-  pub async fn start_queue(&self, queue: &str) -> Result<(), Status> {
+  pub async fn start_queue(&self) -> Result<(), Status> {
     if let Err(e) = self.store.create_queue().await {
       if e.kind() != StoreErrorKind::ExtensionError {
         error!("DB failed {}", e);
         return Err(Status::unavailable("unavailable"));
       } else {
-        debug!("Queue {} was not created, exists already", queue);
+        debug!("Queue {} was not created, exists already", self.store.queue());
       }
     }
     Ok(())
+  }
+
+  pub fn consumer(&self) -> &str {
+    self.store.consumer()
   }
 }
 
@@ -77,6 +78,7 @@ pub struct TxChannel(Sender<Result<Task, Status>>);
 #[tonic::async_trait]
 impl Actor for Dispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
+    // Kill any blocking connection
     let _: u8 = redis::cmd("CLIENT")
       .arg("KILL")
       .arg("ID")
@@ -85,8 +87,9 @@ impl Actor for Dispatcher {
       .await
       .expect("redis_cannot_kill");
 
-    if let Some(Some(n)) = self.rx_watch.recv().await {
-      n.notify();
+    if let Some(Some(task)) = self.rx_watch.recv().await {
+      // Finish the waiting task to stop the worker
+      task.finish();
     }
   }
 }
@@ -122,7 +125,7 @@ enum DispatchCmd {
 struct DispatchWorker {
   store: Store,
   ack_manager: AckManager,
-  tx_watch: WSender<Option<Arc<Notify>>>,
+  tx_watch: WSender<Option<WaitingTask>>,
 }
 
 impl DispatchWorker {
@@ -131,7 +134,7 @@ impl DispatchWorker {
       let notify = self.ack_manager.in_process(task.id.clone());
       self.tx_watch.broadcast(Some(notify.clone())).expect("watch_error");
       tx.send(Ok(task)).await.expect("Cannot send incoming task");
-      notify.notified().await;
+      notify.wait_to_finish().await;
     }
     info!("Client \"{}\" disconnected", self.store.consumer());
   }
@@ -140,18 +143,12 @@ impl DispatchWorker {
     let notify = self.ack_manager.in_process(task.id.clone());
     self.tx_watch.broadcast(Some(notify.clone())).expect("watch_error");
     tx.send(Ok(task)).await.expect("Cannot send incoming task");
-    notify.notified().await;
-    info!("Notify wait then");
+    notify.wait_to_finish().await;
     self.wait_new(tx).await;
   }
 }
 
-#[tonic::async_trait]
-impl Actor for DispatchWorker {
-  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    info!("Dispatched worker stopped")
-  }
-}
+impl Actor for DispatchWorker {}
 
 #[tonic::async_trait]
 impl Handler<DispatchCmd> for DispatchWorker {
@@ -162,7 +159,6 @@ impl Handler<DispatchCmd> for DispatchWorker {
     }
   }
 }
-
 
 pub struct TaskStream {
   stream: Receiver<Result<Task, Status>>,

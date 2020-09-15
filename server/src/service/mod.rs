@@ -69,25 +69,24 @@ impl TasksCore for TasksService {
   async fn acknowledge(&self, request: Request<AcknowledgeRequest>) -> ServiceResult<Empty> {
     self
       .ack_manager
-      .check(request.get_ref())
+      .check(request.into_inner())
       .await
       .map(|_| Response::new(Empty::default()))
   }
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
-    let worker = request.get_ref();
+    let consumer = request.into_inner();
     let dispatcher = Dispatcher::init(
       self.conn_info.clone(),
-      worker.queue.clone(),
-      worker.hostname.clone(),
+      consumer,
       self.ack_manager.clone(),
     )
     .await
     .expect("Cannot create dispatcher");
-    dispatcher.start_queue(&worker.queue).await?;
+    dispatcher.start_queue().await?;
+    info!("Client \"{}\" connected", dispatcher.consumer());
     let tasks_stream = dispatcher.get_tasks().await;
-    info!("Client \"{}\" connected", worker.hostname);
     Ok(Response::new(tasks_stream))
   }
 }
