@@ -15,7 +15,9 @@ pub struct CreateResponse {
 pub struct AcknowledgeRequest {
   #[prost(string, tag = "1")]
   pub task_id: std::string::String,
-  #[prost(enumeration = "TaskStatus", tag = "2")]
+  #[prost(string, tag = "2")]
+  pub queue: std::string::String,
+  #[prost(enumeration = "TaskStatus", tag = "3")]
   pub status: i32,
 }
 /// Worker details

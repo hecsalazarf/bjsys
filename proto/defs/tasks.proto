@@ -26,7 +26,8 @@ message CreateResponse {
 // Acknowledge Request
 message AcknowledgeRequest {
   string task_id = 1;
-  TaskStatus status = 2; 
+  string queue = 2;
+  TaskStatus status = 3; 
 }
 
 // Worker details
