@@ -1,75 +1,25 @@
 use super::store::{Connection, ConnectionInfo, Storage, Store, StoreErrorKind};
 use super::stub::tasks::Task;
+use super::ack::AckManager;
 use core::task::Poll;
 use std::pin::Pin;
 use std::task::Context;
+use std::sync::Arc;
 use tokio::{
   stream::Stream,
   sync::mpsc::{channel, Receiver, Sender},
+  sync::watch::{channel as watch, Receiver as WReceiver, Sender as WSender},
+  sync::Notify,
 };
 use tonic::Status;
 use tracing::{debug, error, info};
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
-struct AckManager;
-
-#[message]
-struct Ack;
-
-impl Actor for AckManager {}
-
-#[tonic::async_trait]
-impl Handler<Ack> for AckManager {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _msg: Ack) {
-    tokio::time::delay_for(std::time::Duration::from_secs(5)).await;
-    info!("Task acked");
-  }
-}
-
-#[message]
-pub struct TxChannel(Sender<Result<Task, Status>>);
-
-#[tonic::async_trait]
-impl Actor for Dispatcher {
-  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    let _: u8 = redis::cmd("CLIENT")
-      .arg("KILL")
-      .arg("ID")
-      .arg(self.store.conn_id())
-      .query_async(&mut self.master_conn.inner)
-      .await
-      .expect("redis_cannot_kill");
-  }
-}
-
-#[tonic::async_trait]
-impl Handler<TxChannel> for Dispatcher {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, tx: TxChannel) {
-    let mut tx = tx.0;
-    match self.store.get_pending().await {
-      Err(e) => {
-        error!("Cannot get pending tasks {}", e);
-        tx.send(Err(Status::unavailable("unavailable")))
-          .await
-          .expect("Cannot send pending error");
-      }
-      Ok(Some(task)) => {
-        tx.send(Ok(task)).await.expect("Cannot send pending task");
-        self.ack_addr.call(Ack).await.unwrap();
-        self.collect(tx);
-      }
-      Ok(None) => {
-        self.collect(tx);
-      }
-    }
-  }
-}
-
-#[derive(Clone)]
 pub struct Dispatcher {
-  ack_addr: Addr<AckManager>,
   store: Store,
   master_conn: Connection,
+  worker: Addr<DispatchWorker>,
+  rx_watch: WReceiver<Option<Arc<Notify>>>,
 }
 
 impl Dispatcher {
@@ -77,17 +27,27 @@ impl Dispatcher {
     conn_info: ConnectionInfo,
     queue: String,
     consumer: String,
+    ack_manager: AckManager,
   ) -> Result<Self, Box<dyn std::error::Error>> {
     let store = Store::new(conn_info.clone())
       .with_group(queue, consumer)
       .connect()
       .await?;
 
+    let (tx_watch, rx_watch) = watch(None);
+
+    let worker = DispatchWorker {
+      store: store.clone(),
+      ack_manager,
+      tx_watch
+    };
+
     let master_conn = Connection::start(conn_info).await?;
     Ok(Self {
       store,
-      ack_addr: AckManager.start().await.unwrap(),
       master_conn,
+      worker: worker.start().await?,
+      rx_watch,
     })
   }
 
@@ -109,19 +69,100 @@ impl Dispatcher {
     }
     Ok(())
   }
+}
 
-  fn collect(&self, mut tx: Sender<Result<Task, Status>>) {
-    let store = self.store.clone();
-    let ack_addr = self.ack_addr.clone();
-    tokio::spawn(async move {
-      while let Ok(task) = store.collect().await {
-        tx.send(Ok(task)).await.expect("Cannot send incoming task");
-        ack_addr.call(Ack).await.unwrap();
-      }
-      info!("Client \"{}\" disconnected", store.consumer());
-    });
+#[message]
+pub struct TxChannel(Sender<Result<Task, Status>>);
+
+#[tonic::async_trait]
+impl Actor for Dispatcher {
+  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
+    let _: u8 = redis::cmd("CLIENT")
+      .arg("KILL")
+      .arg("ID")
+      .arg(self.store.conn_id())
+      .query_async(&mut self.master_conn.inner)
+      .await
+      .expect("redis_cannot_kill");
+
+    if let Some(Some(n)) = self.rx_watch.recv().await {
+      n.notify();
+    }
   }
 }
+
+#[tonic::async_trait]
+impl Handler<TxChannel> for Dispatcher {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, tx: TxChannel) {
+    let mut tx = tx.0;
+    match self.store.get_pending().await {
+      Err(e) => {
+        error!("Cannot get pending tasks {}", e);
+        tx.send(Err(Status::unavailable("unavailable")))
+          .await
+          .expect("Cannot send pending error");
+      }
+      Ok(Some(task)) => {
+        self.worker.send(DispatchCmd::WaitThen(tx, task)).expect("wait_then");
+      }
+      Ok(None) => {
+        self.worker.send(DispatchCmd::WaitNew(tx)).expect("no_wait");
+      }
+    }
+  }
+}
+
+
+#[message]
+enum DispatchCmd {
+  WaitNew(Sender<Result<Task, Status>>),
+  WaitThen(Sender<Result<Task, Status>>, Task),
+}
+
+struct DispatchWorker {
+  store: Store,
+  ack_manager: AckManager,
+  tx_watch: WSender<Option<Arc<Notify>>>,
+}
+
+impl DispatchWorker {
+  async fn wait_new(&mut self, mut tx: Sender<Result<Task, Status>>) {
+    while let Ok(task) = self.store.collect().await {
+      let notify = self.ack_manager.in_process(task.id.clone());
+      self.tx_watch.broadcast(Some(notify.clone())).expect("watch_error");
+      tx.send(Ok(task)).await.expect("Cannot send incoming task");
+      notify.notified().await;
+    }
+    info!("Client \"{}\" disconnected", self.store.consumer());
+  }
+
+  async fn wait_then(&mut self, mut tx: Sender<Result<Task, Status>>, task: Task) {
+    let notify = self.ack_manager.in_process(task.id.clone());
+    self.tx_watch.broadcast(Some(notify.clone())).expect("watch_error");
+    tx.send(Ok(task)).await.expect("Cannot send incoming task");
+    notify.notified().await;
+    info!("Notify wait then");
+    self.wait_new(tx).await;
+  }
+}
+
+#[tonic::async_trait]
+impl Actor for DispatchWorker {
+  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
+    info!("Dispatched worker stopped")
+  }
+}
+
+#[tonic::async_trait]
+impl Handler<DispatchCmd> for DispatchWorker {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: DispatchCmd) {
+    match cmd {
+      DispatchCmd::WaitNew(t) => self.wait_new(t).await,
+      DispatchCmd::WaitThen(tx, t) => self.wait_then(tx, t).await,
+    }
+  }
+}
+
 
 pub struct TaskStream {
   stream: Receiver<Result<Task, Status>>,

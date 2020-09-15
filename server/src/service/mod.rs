@@ -1,3 +1,4 @@
+mod ack;
 mod dispatcher;
 mod store;
 pub mod stub;
@@ -7,13 +8,15 @@ use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Work
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
+use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{ConnectionAddr, ConnectionInfo, Store, Storage};
+use store::{Connection, ConnectionAddr, ConnectionInfo, Storage, Store};
 
 pub struct TasksService {
   conn_info: ConnectionInfo,
   // This store must be used ONLY for non-blocking operations
   store: Store,
+  ack_manager: AckManager,
 }
 
 impl TasksService {
@@ -25,9 +28,17 @@ impl TasksService {
       passwd: None,
     };
 
-    let store = Store::new(conn_info.clone()).connect().await?;
+    let conn = Connection::start(conn_info.clone()).await?;
 
-    Ok(TasksCoreServer::new(TasksService { conn_info, store }))
+    let store = Store::from(conn.clone()).connect().await?;
+
+    let ack_manager = AckManager::init(store.clone()).await?;
+
+    Ok(TasksCoreServer::new(TasksService {
+      conn_info,
+      store,
+      ack_manager,
+    }))
   }
 }
 
@@ -55,8 +66,12 @@ impl TasksCore for TasksService {
       })
   }
 
-  async fn acknowledge(&self, _request: Request<AcknowledgeRequest>) -> ServiceResult<Empty> {
-    Err(Status::unimplemented(""))
+  async fn acknowledge(&self, request: Request<AcknowledgeRequest>) -> ServiceResult<Empty> {
+    self
+      .ack_manager
+      .check(request.get_ref())
+      .await
+      .map(|_| Response::new(Empty::default()))
   }
 
   type FetchStream = TaskStream;
@@ -66,10 +81,10 @@ impl TasksCore for TasksService {
       self.conn_info.clone(),
       worker.queue.clone(),
       worker.hostname.clone(),
+      self.ack_manager.clone(),
     )
     .await
     .expect("Cannot create dispatcher");
-    
     dispatcher.start_queue(&worker.queue).await?;
     let tasks_stream = dispatcher.get_tasks().await;
     info!("Client \"{}\" connected", worker.hostname);

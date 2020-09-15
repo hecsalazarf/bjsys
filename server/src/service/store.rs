@@ -25,6 +25,7 @@ pub trait Storage {
   async fn create_queue(&self) -> Result<(), Self::Error>;
   async fn get_pending(&self) -> Result<Option<Task>, Self::Error>;
   async fn collect(&self) -> Result<Task, Self::Error>;
+  async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
 }
 
 #[derive(Clone)]
@@ -169,6 +170,11 @@ impl Storage for Store {
     // always has one single value
     let t = reply.keys.pop().unwrap().ids.pop().unwrap();
     Ok(t.into())
+  }
+
+  async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error> {
+    let key = generate_key(queue);
+    self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
   }
 }
 
