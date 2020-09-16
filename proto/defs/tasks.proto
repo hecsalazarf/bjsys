@@ -9,8 +9,8 @@ service TasksCore {
   // Acknowledge that a task was processed (consumer)
   rpc Acknowledge(AcknowledgeRequest) returns (Empty) {}
 
-  // Worker that connects to process tasks (consumer)
-  rpc Fetch(Worker) returns (stream Task) {}
+  // Consumer that connects to process tasks (consumer)
+  rpc Fetch(Consumer) returns (stream Task) {}
 }
 
 // Create Request
@@ -30,8 +30,8 @@ message AcknowledgeRequest {
   TaskStatus status = 3; 
 }
 
-// Worker details
-message Worker {
+// Consumer details
+message Consumer {
   string hostname = 1;
   string kind = 2;
   string queue = 3;

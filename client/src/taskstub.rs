@@ -20,9 +20,9 @@ pub struct AcknowledgeRequest {
   #[prost(enumeration = "TaskStatus", tag = "3")]
   pub status: i32,
 }
-/// Worker details
+/// Consumer details
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Worker {
+pub struct Consumer {
   #[prost(string, tag = "1")]
   pub hostname: std::string::String,
   #[prost(string, tag = "2")]
@@ -118,10 +118,10 @@ pub mod tasks_core_client {
       let path = http::uri::PathAndQuery::from_static("/taskstub.TasksCore/Acknowledge");
       self.inner.unary(request.into_request(), path, codec).await
     }
-    #[doc = " Worker that connects to process tasks (consumer)"]
+    #[doc = " Consumer that connects to process tasks (consumer)"]
     pub async fn fetch(
       &mut self,
-      request: impl tonic::IntoRequest<super::Worker>,
+      request: impl tonic::IntoRequest<super::Consumer>,
     ) -> Result<tonic::Response<tonic::codec::Streaming<super::Task>>, tonic::Status> {
       self.inner.ready().await.map_err(|e| {
         tonic::Status::new(

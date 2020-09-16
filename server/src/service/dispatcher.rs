@@ -1,6 +1,6 @@
 use super::ack::{AckManager, WaitingTask};
 use super::store::{connection, Connection, Storage, Store, StoreError};
-use super::stub::tasks::{Task, Worker};
+use super::stub::tasks::{Task, Consumer};
 use core::task::Poll;
 use std::pin::Pin;
 use std::task::Context;
@@ -20,7 +20,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-  pub async fn init(consumer: Worker, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
+  pub async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
     DispatchBuilder::init(consumer, ack_manager).await
   }
 }
@@ -79,7 +79,7 @@ impl DispatchBuilder {
     Ok(TaskStream::new(rx, addr))
   }
 
-  async fn init(consumer: Worker, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
+  async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
     let (store, master_conn) = Self::init_store(consumer).await.map_err(|e| {
       error!("Cannot init dispatcher {}", e);
       Status::unavailable("unavailable") // TODO: Better error description
@@ -92,7 +92,7 @@ impl DispatchBuilder {
     })
   }
 
-  async fn init_store(consumer: Worker) -> Result<(Store, Connection), StoreError> {
+  async fn init_store(consumer: Consumer) -> Result<(Store, Connection), StoreError> {
     let store = Store::new().for_consumer(consumer).connect().await?;
     let conn = connection().await?;
     if let Err(e) = store.create_queue().await {

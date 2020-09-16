@@ -1,4 +1,4 @@
-use super::stub::tasks::{Task, Worker};
+use super::stub::tasks::{Task, Consumer};
 use redis::{
   aio::MultiplexedConnection,
   streams::{
@@ -59,7 +59,7 @@ pub struct Builder {
 }
 
 impl Builder {
-  pub fn for_consumer(mut self, consumer: Worker) -> Self {
+  pub fn for_consumer(mut self, consumer: Consumer) -> Self {
     self.key = generate_key(&consumer.queue);
     self.queue = consumer.queue;
     self.consumer = consumer.hostname;

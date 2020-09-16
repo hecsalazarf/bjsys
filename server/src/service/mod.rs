@@ -4,7 +4,7 @@ mod store;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Worker};
+use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Consumer};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
@@ -63,7 +63,7 @@ impl TasksCore for TasksService {
   }
 
   type FetchStream = TaskStream;
-  async fn fetch(&self, request: Request<Worker>) -> ServiceResult<Self::FetchStream> {
+  async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
     let dispatcher = Dispatcher::init(
       request.into_inner(),
       self.ack_manager.clone(),
