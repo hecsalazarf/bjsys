@@ -68,12 +68,9 @@ impl TasksCore for TasksService {
       request.into_inner(),
       self.ack_manager.clone(),
     )
-    .await
-    .expect("Cannot create dispatcher");
-    
-    dispatcher.start_queue().await?;
-    info!("Client \"{}\" connected", dispatcher.consumer());
-    let tasks_stream = dispatcher.get_tasks().await;
+    .await?;
+
+    let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
     Ok(Response::new(tasks_stream))
   }
 }

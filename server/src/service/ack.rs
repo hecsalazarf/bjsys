@@ -71,7 +71,6 @@ impl AckWorker {
 
   fn mark_done(&mut self, task_id: Arc<String>) {
     if let Some(n) = self.tasks.remove(&task_id) {
-      info!("Notify");
       n.notify();
     }
   }

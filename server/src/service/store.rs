@@ -4,9 +4,11 @@ use redis::{
   streams::{
     StreamId, StreamPendingCountReply, StreamRangeReply, StreamReadOptions, StreamReadReply,
   },
-  AsyncCommands, Client, ConnectionAddr, ConnectionInfo, RedisError as StoreError,
+  AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
 };
 use std::sync::Arc;
+
+pub use redis::RedisError as StoreError;
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
