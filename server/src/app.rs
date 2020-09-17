@@ -28,7 +28,6 @@ impl App {
     tracing_subscriber::fmt()
       .with_env_filter(filter)
       .with_timer(ChronoLocal::rfc3339())
-      .with_thread_names(true)
       .init();
 
     Self::build().await
