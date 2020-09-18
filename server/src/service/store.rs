@@ -1,4 +1,4 @@
-use super::stub::tasks::{Task, Consumer};
+use super::stub::tasks::{Consumer, Task};
 use redis::{
   aio::MultiplexedConnection,
   streams::{
@@ -55,7 +55,6 @@ pub struct Builder {
   queue: String,
   consumer: String,
   key: String,
-  conn: Option<Connection>,
 }
 
 impl Builder {
@@ -67,12 +66,8 @@ impl Builder {
   }
 
   pub async fn connect(self) -> Result<Store, StoreError> {
-    let conn: Connection;
-    if let Some(c) = self.conn {
-      conn = c;
-    } else {
-      conn = connection().await?
-    }
+    let conn = connection().await?;
+
     Ok(Store {
       conn,
       queue: Arc::new(self.queue),
