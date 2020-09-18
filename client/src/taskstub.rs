@@ -31,6 +31,8 @@ pub struct Consumer {
   pub queue: std::string::String,
   #[prost(string, repeated, tag = "4")]
   pub label: ::std::vec::Vec<std::string::String>,
+  #[prost(uint32, tag = "5")]
+  pub workers: u32,
 }
 /// Task
 #[derive(Clone, PartialEq, ::prost::Message)]

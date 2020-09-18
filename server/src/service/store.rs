@@ -50,11 +50,22 @@ pub trait Storage {
   async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
 }
 
-#[derive(Default)]
 pub struct Builder {
   queue: String,
   consumer: String,
   key: String,
+  workers: usize,
+}
+
+impl Default for Builder {
+  fn default() -> Self {
+    Self {
+      queue: String::default(),
+      consumer: String::default(),
+      key: String::default(),
+      workers: 1,
+    }
+  }
 }
 
 impl Builder {
@@ -62,18 +73,28 @@ impl Builder {
     self.key = generate_key(&consumer.queue);
     self.queue = consumer.queue;
     self.consumer = consumer.hostname;
+    self.workers = consumer.workers as usize;
     self
   }
 
-  pub async fn connect(self) -> Result<Store, StoreError> {
-    let conn = connection().await?;
+  pub async fn connect(self) -> Result<Vec<Store>, StoreError> {
+    let queue = Arc::new(self.queue);
+    let key = Arc::new(self.key);
+    let mut stores = Vec::with_capacity(self.workers);
 
-    Ok(Store {
-      conn,
-      queue: Arc::new(self.queue),
-      consumer: Arc::new(self.consumer),
-      key: Arc::new(self.key),
-    })
+    for i in 0..stores.capacity() {
+      let conn = connection().await?;
+      let consumer = format!("{}-{}", self.consumer, i);
+      let store = Store {
+        conn,
+        queue: queue.clone(),
+        consumer: Arc::new(consumer),
+        key: key.clone(),
+      };
+      stores.push(store);
+    }
+
+    Ok(stores)
   }
 }
 

@@ -20,7 +20,7 @@ pub struct TasksService {
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let store = Store::new().connect().await?;
+    let store = Store::new().connect().await?.pop().unwrap();
     let ack_manager = AckManager::init(store.clone()).await?;
 
     Ok(TasksCoreServer::new(TasksService {

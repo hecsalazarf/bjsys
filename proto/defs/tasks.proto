@@ -36,6 +36,7 @@ message Consumer {
   string kind = 2;
   string queue = 3;
   repeated string label = 4;
+  uint32 workers = 5;
 }
 
 // Task
