@@ -1,6 +1,7 @@
 use super::store::{Storage, Store};
 use super::stub::tasks::AcknowledgeRequest;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tonic::Status;
@@ -110,3 +111,17 @@ impl WaitingTask {
     self.notify.notify();
   }
 }
+
+impl Hash for WaitingTask {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.id.hash(state);
+  }
+}
+
+impl PartialEq for WaitingTask {
+  fn eq(&self, other: &Self) -> bool {
+      self.id == other.id
+  }
+}
+
+impl Eq for WaitingTask {}

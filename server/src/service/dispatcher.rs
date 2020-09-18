@@ -2,21 +2,19 @@ use super::ack::{AckManager, WaitingTask};
 use super::store::{connection, Connection, Storage, Store, StoreError};
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::Context;
-use tokio::{
-  stream::Stream,
-  sync::{mpsc, watch},
-};
+use tokio::{stream::Stream, sync::mpsc};
 use tonic::Status;
 use tracing::{debug, error, info};
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 pub struct Dispatcher {
-  worker: Addr<DispatchWorker>,
+  workers: Vec<Addr<DispatchWorker>>,
   master_conn: Connection,
   conn_id: usize,
-  current_task: watch::Receiver<Option<WaitingTask>>,
+  waiting_tasks: HashSet<WaitingTask>,
 }
 
 impl Dispatcher {
@@ -40,10 +38,31 @@ impl Actor for Dispatcher {
       .await
       .expect("redis_cannot_kill");
 
-    if let Some(Some(task)) = self.current_task.recv().await {
-      // Finish the waiting task to stop the worker
+    for task in self.waiting_tasks.iter() {
       task.finish();
     }
+  }
+}
+
+#[message]
+enum DispatcherCmd {
+  Add(WaitingTask),
+  Remove(WaitingTask),
+  Init(Addr<DispatchWorker>),
+}
+
+#[tonic::async_trait]
+impl Handler<DispatcherCmd> for Dispatcher {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
+    match cmd {
+      DispatcherCmd::Add(t) => {
+        self.waiting_tasks.insert(t);
+      }
+      DispatcherCmd::Remove(t) => {
+        self.waiting_tasks.remove(&t);
+      }
+      DispatcherCmd::Init(a) => self.workers.push(a),
+    };
   }
 }
 
@@ -55,31 +74,30 @@ pub struct DispatchBuilder {
 
 impl DispatchBuilder {
   pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
-    let (tx_watch, rx_watch) = watch::channel(None);
     let (tx, rx) = mpsc::channel(1);
 
     let conn_id = self.store.conn_id();
+    let dispatcher = Dispatcher {
+      workers: Vec::with_capacity(1),
+      master_conn: self.master_conn,
+      conn_id,
+      waiting_tasks: HashSet::new(),
+    };
+
+    let dispatcher = dispatcher.start().await?;
+
     let worker = DispatchWorker {
       store: self.store,
       ack_manager: self.ack_manager,
-      tx_watch,
       tx,
+      master: dispatcher.clone(),
     };
 
-    let dispatcher = Dispatcher {
-      worker: worker.start().await?,
-      current_task: rx_watch,
-      master_conn: self.master_conn,
-      conn_id,
-    };
+    let worker_addr = worker.start().await?;
 
-    dispatcher
-      .worker
-      .send(DispatchCmd::Fetch)
-      .expect("send_fetch");
-
-    let addr = dispatcher.start().await.unwrap();
-    Ok(TaskStream::new(rx, addr))
+    worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
+    dispatcher.call(DispatcherCmd::Init(worker_addr)).await?;
+    Ok(TaskStream::new(rx, dispatcher))
   }
 
   async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
@@ -119,15 +137,15 @@ impl DispatchBuilder {
 }
 
 #[message]
-enum DispatchCmd {
+enum WorkerCmd {
   Fetch,
 }
 
 struct DispatchWorker {
   store: Store,
   ack_manager: AckManager,
-  tx_watch: watch::Sender<Option<WaitingTask>>,
   tx: mpsc::Sender<Result<Task, Status>>,
+  master: Addr<Dispatcher>,
 }
 
 impl DispatchWorker {
@@ -145,16 +163,27 @@ impl DispatchWorker {
 
   async fn send(&mut self, task: Task) {
     let notify = self.ack_manager.in_process(task.id.clone());
+
+    // Call to master may fail when its address has been dropped,
+    // which it's posible only when the dispatcher received the stop
+    // command. So we don't care for error because Dispatch Worker is
+    // dropped as well.
     self
-      .tx_watch
-      .broadcast(Some(notify.clone()))
-      .expect("watch_error");
+      .master
+      .call(DispatcherCmd::Add(notify.clone()))
+      .await
+      .unwrap_or(());
     self
       .tx
       .send(Ok(task))
       .await
       .expect("Cannot send incoming task");
     notify.wait_to_finish().await;
+    self
+      .master
+      .call(DispatcherCmd::Remove(notify))
+      .await
+      .unwrap_or(());
   }
 
   async fn fetch(&mut self) {
@@ -181,23 +210,22 @@ impl DispatchWorker {
 impl Actor for DispatchWorker {}
 
 #[tonic::async_trait]
-impl Handler<DispatchCmd> for DispatchWorker {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: DispatchCmd) {
+impl Handler<WorkerCmd> for DispatchWorker {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: WorkerCmd) {
     match cmd {
-      DispatchCmd::Fetch => self.fetch().await,
+      WorkerCmd::Fetch => self.fetch().await,
     }
   }
 }
 
 pub struct TaskStream {
   stream: mpsc::Receiver<Result<Task, Status>>,
-  // Keep dispatcher address to stop actor when stream drops
-  _addr: Addr<Dispatcher>,
+  dispatcher: Addr<Dispatcher>,
 }
 
 impl TaskStream {
-  fn new(stream: mpsc::Receiver<Result<Task, Status>>, _addr: Addr<Dispatcher>) -> Self {
-    Self { stream, _addr }
+  fn new(stream: mpsc::Receiver<Result<Task, Status>>, dispatcher: Addr<Dispatcher>) -> Self {
+    Self { stream, dispatcher }
   }
 }
 
@@ -205,5 +233,11 @@ impl Stream for TaskStream {
   type Item = Result<Task, Status>;
   fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
     self.stream.poll_recv(cx)
+  }
+}
+
+impl Drop for TaskStream {
+  fn drop(&mut self) {
+    self.dispatcher.stop(None).expect("drop_dispatcher");
   }
 }
