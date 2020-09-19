@@ -29,16 +29,7 @@ impl Dispatcher {
 impl Actor for Dispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     // Kill any blocking connection
-    // TODO: Create lua script to send one request only
-    for w in self.workers.iter() {
-      let _: u8 = redis::cmd("CLIENT")
-      .arg("KILL")
-      .arg("ID")
-      .arg(w.0)
-      .query_async(&mut self.master_conn.inner)
-      .await
-      .expect("redis_cannot_kill");
-    }
+    Connection::kill(&mut self.master_conn, self.workers.iter().map(|e| e.0)).await;
 
     for task in self.waiting_tasks.iter() {
       task.finish();
@@ -63,7 +54,7 @@ impl Handler<DispatcherCmd> for Dispatcher {
       DispatcherCmd::Remove(t) => {
         self.waiting_tasks.remove(&t);
       }
-      DispatcherCmd::Init(conn_id, addr) => self.workers.push((conn_id, addr))// self.workers.push(a),
+      DispatcherCmd::Init(conn_id, addr) => self.workers.push((conn_id, addr)), // self.workers.push(a),
     };
   }
 }
@@ -82,7 +73,6 @@ impl DispatchBuilder {
       master_conn: self.master_conn,
       waiting_tasks: HashSet::new(),
     };
-    
     let dispatcher = dispatcher.start().await?;
     let (tx, rx) = mpsc::channel(n);
 
@@ -96,7 +86,9 @@ impl DispatchBuilder {
       };
       let worker_addr = worker.start().await?;
       worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
-      dispatcher.call(DispatcherCmd::Init(conn_id, worker_addr)).await?;
+      dispatcher
+        .call(DispatcherCmd::Init(conn_id, worker_addr))
+        .await?;
     }
     Ok(TaskStream::new(rx, dispatcher))
   }
@@ -120,7 +112,10 @@ impl DispatchBuilder {
     if let Err(e) = stores[0].create_queue().await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
-          debug!("Queue {} was not created, exists already", stores[0].queue());
+          debug!(
+            "Queue {} was not created, exists already",
+            stores[0].queue()
+          );
         }
       } else {
         return Err(e);

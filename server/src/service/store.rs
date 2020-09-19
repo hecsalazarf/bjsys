@@ -15,8 +15,22 @@ const DEFAULT_GROUP: &str = "default_group";
 
 #[derive(Clone)]
 pub struct Connection {
-  pub id: usize,
-  pub inner: MultiplexedConnection,
+  id: usize,
+  inner: MultiplexedConnection,
+}
+
+impl Connection {
+  pub async fn kill<I: Iterator<Item = usize>>(conn: &mut Self, ids: I) {
+    let mut pipe = &mut redis::pipe();
+    for id in ids {
+      pipe = pipe.cmd("CLIENT").arg("KILL").arg("ID").arg(id);
+    }
+
+    let _: Vec<u8> = pipe
+      .query_async(&mut conn.inner)
+      .await
+      .expect("redis_cannot_kill");
+  }
 }
 
 pub async fn connection() -> Result<Connection, StoreError> {
