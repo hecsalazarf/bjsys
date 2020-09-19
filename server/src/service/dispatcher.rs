@@ -11,9 +11,8 @@ use tracing::{debug, error, info};
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 pub struct Dispatcher {
-  workers: Vec<Addr<DispatchWorker>>,
+  workers: Vec<(usize, Addr<DispatchWorker>)>,
   master_conn: Connection,
-  conn_id: usize,
   waiting_tasks: HashSet<WaitingTask>,
 }
 
@@ -30,13 +29,16 @@ impl Dispatcher {
 impl Actor for Dispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     // Kill any blocking connection
-    let _: u8 = redis::cmd("CLIENT")
+    // TODO: Create lua script to send one request only
+    for w in self.workers.iter() {
+      let _: u8 = redis::cmd("CLIENT")
       .arg("KILL")
       .arg("ID")
-      .arg(self.conn_id)
+      .arg(w.0)
       .query_async(&mut self.master_conn.inner)
       .await
       .expect("redis_cannot_kill");
+    }
 
     for task in self.waiting_tasks.iter() {
       task.finish();
@@ -48,7 +50,7 @@ impl Actor for Dispatcher {
 enum DispatcherCmd {
   Add(WaitingTask),
   Remove(WaitingTask),
-  Init(Addr<DispatchWorker>),
+  Init(usize, Addr<DispatchWorker>),
 }
 
 #[tonic::async_trait]
@@ -61,78 +63,71 @@ impl Handler<DispatcherCmd> for Dispatcher {
       DispatcherCmd::Remove(t) => {
         self.waiting_tasks.remove(&t);
       }
-      DispatcherCmd::Init(a) => self.workers.push(a),
+      DispatcherCmd::Init(conn_id, addr) => self.workers.push((conn_id, addr))// self.workers.push(a),
     };
   }
 }
 
 pub struct DispatchBuilder {
-  store: Store,
+  stores: Vec<Store>,
   ack_manager: AckManager,
   master_conn: Connection,
 }
 
 impl DispatchBuilder {
   pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
-    let (tx, rx) = mpsc::channel(1);
-
-    let conn_id = self.store.conn_id();
+    let n = self.stores.len(); // Number of workers
     let dispatcher = Dispatcher {
-      workers: Vec::with_capacity(1),
+      workers: Vec::with_capacity(n),
       master_conn: self.master_conn,
-      conn_id,
       waiting_tasks: HashSet::new(),
     };
-
+    
     let dispatcher = dispatcher.start().await?;
+    let (tx, rx) = mpsc::channel(n);
 
-    let worker = DispatchWorker {
-      store: self.store,
-      ack_manager: self.ack_manager,
-      tx,
-      master: dispatcher.clone(),
-    };
-
-    let worker_addr = worker.start().await?;
-
-    worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
-    dispatcher.call(DispatcherCmd::Init(worker_addr)).await?;
+    for store in self.stores.into_iter() {
+      let conn_id = store.conn_id();
+      let worker = DispatchWorker {
+        store: store,
+        ack_manager: self.ack_manager.clone(),
+        tx: tx.clone(),
+        master: dispatcher.clone(),
+      };
+      let worker_addr = worker.start().await?;
+      worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
+      dispatcher.call(DispatcherCmd::Init(conn_id, worker_addr)).await?;
+    }
     Ok(TaskStream::new(rx, dispatcher))
   }
 
   async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
-    let (store, master_conn) = Self::init_store(consumer).await.map_err(|e| {
+    let (stores, master_conn) = Self::init_store(consumer).await.map_err(|e| {
       error!("Cannot init dispatcher {}", e);
       Status::unavailable("unavailable") // TODO: Better error description
     })?;
 
     Ok(DispatchBuilder {
-      store: store,
+      stores,
       ack_manager,
       master_conn,
     })
   }
 
-  async fn init_store(consumer: Consumer) -> Result<(Store, Connection), StoreError> {
-    let store = Store::new()
-      .for_consumer(consumer)
-      .connect()
-      .await?
-      .pop()
-      .expect("HEYO");
-  
-    let conn = connection().await?;
-    if let Err(e) = store.create_queue().await {
+  async fn init_store(consumer: Consumer) -> Result<(Vec<Store>, Connection), StoreError> {
+    let stores = Store::new().for_consumer(consumer).connect().await?;
+    let master_conn = connection().await?;
+    if let Err(e) = stores[0].create_queue().await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
-          debug!("Queue {} was not created, exists already", store.queue());
+          debug!("Queue {} was not created, exists already", stores[0].queue());
         }
       } else {
         return Err(e);
       }
     }
 
-    Ok((store, conn))
+    Ok((stores, master_conn))
   }
 }
 
