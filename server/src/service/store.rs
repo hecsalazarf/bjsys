@@ -2,9 +2,9 @@ use super::stub::tasks::{Consumer, Task};
 use redis::{
   aio::MultiplexedConnection,
   streams::{
-    StreamId, StreamPendingCountReply, StreamRangeReply, StreamReadOptions, StreamReadReply,
+    StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply,
   },
-  AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
+  AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use std::sync::Arc;
 
@@ -165,18 +165,29 @@ impl Storage for Store {
 
   async fn get_pending(&self) -> Result<Option<Task>, Self::Error> {
     let key = self.key.as_ref();
-    let mut res: StreamPendingCountReply = self
-      .connection()
-      .xpending_consumer_count(key, DEFAULT_GROUP, "-", "+", 1, self.consumer.as_ref())
-      .await?;
-    // TODO: Create lua script to avoid double request
-    if let Some(p) = res.ids.pop() {
-      let mut reply: StreamRangeReply = self.connection().xrange(key, &p.id, &p.id).await?;
-      if let Some(t) = reply.ids.pop() {
-        return Ok(Some(t.into()));
-      }
-    }
 
+    let script = Script::new(
+      r"
+      local pending = redis.call('xpending', KEYS[1], ARGV[1], '-', '+', '1', ARGV[2])
+      if table.maxn(pending) == 1 then
+        local id = pending[1][1]
+        return redis.call('xrange', KEYS[1], id, id)
+      else
+        return pending
+      end
+    ",
+    );
+
+    let mut reply: StreamRangeReply = script
+      .key(key)
+      .arg(DEFAULT_GROUP)
+      .arg(self.consumer.as_ref())
+      .invoke_async(&mut self.connection())
+      .await?;
+    
+    if let Some(t) = reply.ids.pop() {
+      return Ok(Some(t.into()));
+    }
     Ok(None)
   }
 
