@@ -1,9 +1,7 @@
 use super::stub::tasks::{Consumer, Task};
 use redis::{
   aio::MultiplexedConnection,
-  streams::{
-    StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply,
-  },
+  streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use std::sync::Arc;
@@ -101,6 +99,7 @@ impl Builder {
       let consumer = format!("{}-{}", self.consumer, i);
       let store = Store {
         conn,
+        script: ScriptStore::new(),
         queue: queue.clone(),
         consumer: Arc::new(consumer),
         key: key.clone(),
@@ -118,6 +117,7 @@ pub struct Store {
   queue: Arc<String>,
   consumer: Arc<String>,
   key: Arc<String>,
+  script: &'static ScriptStore,
 }
 
 impl Store {
@@ -166,25 +166,14 @@ impl Storage for Store {
   async fn get_pending(&self) -> Result<Option<Task>, Self::Error> {
     let key = self.key.as_ref();
 
-    let script = Script::new(
-      r"
-      local pending = redis.call('xpending', KEYS[1], ARGV[1], '-', '+', '1', ARGV[2])
-      if table.maxn(pending) == 1 then
-        local id = pending[1][1]
-        return redis.call('xrange', KEYS[1], id, id)
-      else
-        return pending
-      end
-    ",
-    );
-
-    let mut reply: StreamRangeReply = script
+    let mut reply: StreamRangeReply = self
+      .script
+      .pending_task()
       .key(key)
       .arg(DEFAULT_GROUP)
       .arg(self.consumer.as_ref())
       .invoke_async(&mut self.connection())
       .await?;
-    
     if let Some(t) = reply.ids.pop() {
       return Ok(Some(t.into()));
     }
@@ -230,4 +219,46 @@ impl From<StreamId> for Task {
 
 fn generate_key(queue: &str) -> String {
   format!("{}_{}", queue, PENDING_SUFFIX)
+}
+
+use std::collections::HashMap;
+use std::sync::Once;
+
+const PENDING_SCRIPT: &str = r"
+  local pending = redis.call('xpending', KEYS[1], ARGV[1], '-', '+', '1', ARGV[2])
+  if table.maxn(pending) == 1 then
+    local id = pending[1][1]
+    return redis.call('xrange', KEYS[1], id, id)
+  else
+    return pending
+  end
+";
+
+const PENDING_NAME: &str = "PENDING_SCRIPT";
+
+struct ScriptStore {
+  scripts: Option<HashMap<&'static str, Script>>,
+}
+
+impl ScriptStore {
+  fn new() -> &'static Self {
+    static START: Once = Once::new();
+    static mut SCRIPT: ScriptStore = ScriptStore { scripts: None };
+
+    // Safe because we only write once in a synchronized fashion
+    unsafe {
+      START.call_once(|| {
+        tracing::debug!("Loading store scripts");
+        let mut scripts = HashMap::new();
+        scripts.insert(PENDING_NAME, Script::new(PENDING_SCRIPT));
+        SCRIPT.scripts = Some(scripts);
+      });
+
+      &SCRIPT
+    }
+  }
+
+  fn pending_task(&'static self) -> &'static Script {
+    self.scripts.as_ref().unwrap().get(PENDING_NAME).unwrap()
+  }
 }
