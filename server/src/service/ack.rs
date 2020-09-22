@@ -10,33 +10,21 @@ use xactor::{message, Actor, Addr, Context, Handler};
 
 #[derive(Clone)]
 pub struct AckManager {
-  store: Store,
   worker: Addr<AckWorker>,
 }
 
 impl AckManager {
   pub async fn init(store: Store) -> Result<Self, Box<dyn std::error::Error>> {
-    let worker = AckWorker::new().start().await?;
-    Ok(Self { store, worker })
+    let worker = AckWorker::new(store).start().await?;
+    Ok(Self { worker })
   }
 
   pub async fn check(&self, req: AcknowledgeRequest) -> Result<(), Status> {
-    match self.store.ack(&req.task_id, &req.queue).await {
-      Ok(r) => {
-        if r > 0 {
-          info!("Task {} was completed", req.task_id);
-          self
-            .worker
-            .send(AckCmd::Done(Arc::new(req.task_id)))
-            .expect("ack_done");
-        }
-        Ok(())
-      }
-      Err(e) => {
-        error!("Cannot ack task {}: {}", req.task_id, e);
-        Err(Status::unavailable("Service not available"))
-      }
-    }
+    self
+      .worker
+      .call(Acknowledge(req))
+      .await
+      .expect("cannot_check")
   }
 
   pub fn in_process(&self, task_id: String) -> WaitingTask {
@@ -51,18 +39,22 @@ impl AckManager {
 
 #[message]
 enum AckCmd {
-  Done(Arc<String>),
   InProcess(WaitingTask),
 }
 
+#[message(result = "Result<(), Status>")]
+struct Acknowledge(AcknowledgeRequest);
+
 struct AckWorker {
   tasks: HashMap<Arc<String>, Arc<Notify>>,
+  store: Store,
 }
 
 impl AckWorker {
-  pub fn new() -> Self {
+  pub fn new(store: Store) -> Self {
     Self {
       tasks: HashMap::new(),
+      store,
     }
   }
 
@@ -70,9 +62,21 @@ impl AckWorker {
     self.tasks.insert(task.id, task.notify);
   }
 
-  fn mark_done(&mut self, task_id: Arc<String>) {
-    if let Some(n) = self.tasks.remove(&task_id) {
-      n.notify();
+  async fn mark_done(&mut self, req: AcknowledgeRequest) -> Result<(), Status> {
+    match self.store.ack(&req.task_id, &req.queue).await {
+      Ok(r) => {
+        if r > 0 {
+          info!("Task {} was completed", req.task_id);
+          if let Some(n) = self.tasks.remove(&Arc::new(req.task_id)) {
+            n.notify();
+          }
+        }
+        Ok(())
+      }
+      Err(e) => {
+        error!("Cannot ack task {}: {}", req.task_id, e);
+        Err(Status::unavailable("Service not available"))
+      }
     }
   }
 }
@@ -84,8 +88,14 @@ impl Handler<AckCmd> for AckWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: AckCmd) {
     match cmd {
       AckCmd::InProcess(t) => self.in_process(t),
-      AckCmd::Done(t) => self.mark_done(t),
     }
+  }
+}
+
+#[tonic::async_trait]
+impl Handler<Acknowledge> for AckWorker {
+  async fn handle(&mut self, _ctx: &mut Context<Self>, ack: Acknowledge) -> Result<(), Status> {
+    self.mark_done(ack.0).await
   }
 }
 
@@ -120,7 +130,7 @@ impl Hash for WaitingTask {
 
 impl PartialEq for WaitingTask {
   fn eq(&self, other: &Self) -> bool {
-      self.id == other.id
+    self.id == other.id
   }
 }
 
