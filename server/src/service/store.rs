@@ -5,6 +5,7 @@ use redis::{
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use std::sync::Arc;
+use tokio::{stream::StreamExt, sync::mpsc::unbounded_channel};
 
 pub use redis::RedisError as StoreError;
 
@@ -92,22 +93,34 @@ impl Builder {
   pub async fn connect(self) -> Result<Vec<Store>, StoreError> {
     let queue = Arc::new(self.queue);
     let key = Arc::new(self.key);
-    let mut stores = Vec::with_capacity(self.workers);
 
-    for i in 0..stores.capacity() {
-      let conn = connection().await?;
+    let (tx, rx) = unbounded_channel();
+    // Create connection for each worker concurrently
+    for i in 0..self.workers {
       let consumer = format!("{}-{}", self.consumer, i);
-      let store = Store {
+      let txc = tx.clone();
+      tokio::spawn(async move {
+        let conn = connection().await.map(|c| (c, consumer));
+        // We don't care if it fails
+        txc.send(conn).unwrap_or(());
+      });
+    }
+    // Drop the first sender, so that stream does not block indefinitely
+    drop(tx);
+
+    // Map Result to append connection and consumer to each Store
+    let map = rx.map(|r| {
+      r.map(|(conn, consumer)| Store {
         conn,
         script: ScriptStore::new(),
         queue: queue.clone(),
         consumer: Arc::new(consumer),
         key: key.clone(),
-      };
-      stores.push(store);
-    }
+      })
+    });
 
-    Ok(stores)
+    // Wait for all connections, fail at first error
+    map.collect().await
   }
 }
 
