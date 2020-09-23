@@ -142,10 +142,6 @@ impl Store {
     self.conn.id
   }
 
-  pub fn consumer(&self) -> &str {
-    self.consumer.as_ref()
-  }
-
   pub fn queue(&self) -> &str {
     self.queue.as_ref()
   }

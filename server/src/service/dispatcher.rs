@@ -8,12 +8,13 @@ use std::task::Context;
 use tokio::{stream::Stream, sync::mpsc};
 use tonic::Status;
 use tracing::{debug, error, info};
-use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
+use xactor::{message, Actor, Addr, Context as ActorContext, Handler, Error as ActorError};
 
 pub struct Dispatcher {
   workers: Vec<(usize, Addr<DispatchWorker>)>,
   master_conn: Connection,
   waiting_tasks: HashSet<WaitingTask>,
+  name: String,
 }
 
 impl Dispatcher {
@@ -34,6 +35,13 @@ impl Actor for Dispatcher {
     for task in self.waiting_tasks.iter() {
       task.finish();
     }
+
+    info!("Consumer '{}' has disconnected", self.name);
+  }
+
+  async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+    info!("Consumer '{}' has connected with {} workers", self.name, self.workers.capacity());
+    Ok(())
   }
 }
 
@@ -63,6 +71,7 @@ pub struct DispatchBuilder {
   stores: Vec<Store>,
   ack_manager: AckManager,
   master_conn: Connection,
+  name: String,
 }
 
 impl DispatchBuilder {
@@ -72,6 +81,7 @@ impl DispatchBuilder {
       workers: Vec::with_capacity(n),
       master_conn: self.master_conn,
       waiting_tasks: HashSet::new(),
+      name: self.name,
     };
     let dispatcher = dispatcher.start().await?;
     let (tx, rx) = mpsc::channel(n);
@@ -94,6 +104,7 @@ impl DispatchBuilder {
   }
 
   async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
+    let name = consumer.hostname.clone();
     let (stores, master_conn) = Self::init_store(consumer).await.map_err(|e| {
       error!("Cannot init dispatcher {}", e);
       Status::unavailable("unavailable") // TODO: Better error description
@@ -103,6 +114,7 @@ impl DispatchBuilder {
       stores,
       ack_manager,
       master_conn,
+      name,
     })
   }
 
@@ -143,7 +155,6 @@ impl DispatchWorker {
     while let Ok(task) = self.store.collect().await {
       self.send(task).await;
     }
-    info!("Consumer \"{}\" disconnected", self.store.consumer());
   }
 
   async fn send_and_wait(&mut self, task: Task) {
@@ -177,7 +188,6 @@ impl DispatchWorker {
   }
 
   async fn fetch(&mut self) {
-    info!("Consumer \"{}\" connected", self.store.consumer());
     match self.store.get_pending().await {
       Err(e) => {
         error!("Cannot get pending tasks {}", e);
