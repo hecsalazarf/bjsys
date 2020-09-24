@@ -8,7 +8,7 @@ use std::task::Context;
 use tokio::{stream::Stream, sync::mpsc};
 use tonic::Status;
 use tracing::{debug, error, info};
-use xactor::{message, Actor, Addr, Context as ActorContext, Handler, Error as ActorError};
+use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
 
 pub struct Dispatcher {
   workers: Vec<(usize, Addr<DispatchWorker>)>,
@@ -40,7 +40,11 @@ impl Actor for Dispatcher {
   }
 
   async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    info!("Consumer '{}' has connected with {} workers", self.name, self.workers.capacity());
+    info!(
+      "Consumer '{}' has connected with {} workers",
+      self.name,
+      self.workers.capacity()
+    );
     Ok(())
   }
 }
@@ -119,7 +123,7 @@ impl DispatchBuilder {
   }
 
   async fn init_store(consumer: Consumer) -> Result<(Vec<Store>, Connection), StoreError> {
-    let stores = Store::new().for_consumer(consumer).connect().await?;
+    let mut stores = Store::new().for_consumer(consumer).connect().await?;
     let master_conn = connection().await?;
     if let Err(e) = stores[0].create_queue().await {
       if let Some(c) = e.code() {

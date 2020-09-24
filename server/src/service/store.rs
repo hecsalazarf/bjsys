@@ -1,6 +1,6 @@
 use super::stub::tasks::{Consumer, Task};
 use redis::{
-  aio::MultiplexedConnection,
+  aio::Connection as AsyncConnection,
   streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
@@ -12,10 +12,9 @@ pub use redis::RedisError as StoreError;
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
 
-#[derive(Clone)]
 pub struct Connection {
   id: usize,
-  inner: MultiplexedConnection,
+  inner: AsyncConnection,
 }
 
 impl Connection {
@@ -24,7 +23,6 @@ impl Connection {
     for id in ids {
       pipe = pipe.cmd("CLIENT").arg("KILL").arg("ID").arg(id);
     }
-
     let _: Vec<u8> = pipe
       .query_async(&mut conn.inner)
       .await
@@ -41,9 +39,7 @@ pub async fn connection() -> Result<Connection, StoreError> {
     passwd: None,
   };
 
-  let mut inner = Client::open(conn_info)?
-    .get_multiplexed_async_connection()
-    .await?;
+  let mut inner = Client::open(conn_info)?.get_async_connection().await?;
   let id = redis::cmd("CLIENT")
     .arg("ID")
     .query_async(&mut inner)
@@ -56,11 +52,11 @@ pub async fn connection() -> Result<Connection, StoreError> {
 pub trait Storage {
   type CreateResult: Send + Sized;
   type Error: std::error::Error;
-  async fn create_task(&self, task: Task) -> Result<Self::CreateResult, Self::Error>;
-  async fn create_queue(&self) -> Result<(), Self::Error>;
-  async fn get_pending(&self) -> Result<Option<Task>, Self::Error>;
-  async fn collect(&self) -> Result<Task, Self::Error>;
-  async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
+  async fn create_task(&mut self, task: Task) -> Result<Self::CreateResult, Self::Error>;
+  async fn create_queue(&mut self) -> Result<(), Self::Error>;
+  async fn get_pending(&mut self) -> Result<Option<Task>, Self::Error>;
+  async fn collect(&mut self) -> Result<Task, Self::Error>;
+  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
 }
 
 pub struct Builder {
@@ -124,7 +120,6 @@ impl Builder {
   }
 }
 
-#[derive(Clone)]
 pub struct Store {
   conn: Connection,
   queue: Arc<String>,
@@ -146,10 +141,8 @@ impl Store {
     self.queue.as_ref()
   }
 
-  fn connection(&self) -> MultiplexedConnection {
-    // Cloning allows to send requests concurrently on the same
-    // (tcp/unix socket) connection
-    self.conn.inner.clone()
+  fn connection(&mut self) -> &mut AsyncConnection {
+    &mut self.conn.inner
   }
 }
 
@@ -157,7 +150,7 @@ impl Store {
 impl Storage for Store {
   type CreateResult = String;
   type Error = StoreError;
-  async fn create_task(&self, task: Task) -> Result<Self::CreateResult, Self::Error> {
+  async fn create_task(&mut self, task: Task) -> Result<Self::CreateResult, Self::Error> {
     let key = generate_key(&task.queue);
     self
       .connection()
@@ -165,14 +158,16 @@ impl Storage for Store {
       .await
   }
 
-  async fn create_queue(&self) -> Result<(), Self::Error> {
+  async fn create_queue(&mut self) -> Result<(), Self::Error> {
+    // TODO Do not clone
+    let key = self.key.clone();
     self
       .connection()
-      .xgroup_create_mkstream(self.key.as_ref(), DEFAULT_GROUP, 0)
+      .xgroup_create_mkstream(key.as_ref(), DEFAULT_GROUP, 0)
       .await
   }
 
-  async fn get_pending(&self) -> Result<Option<Task>, Self::Error> {
+  async fn get_pending(&mut self) -> Result<Option<Task>, Self::Error> {
     let key = self.key.as_ref();
 
     let mut reply: StreamRangeReply = self
@@ -181,7 +176,7 @@ impl Storage for Store {
       .key(key)
       .arg(DEFAULT_GROUP)
       .arg(self.consumer.as_ref())
-      .invoke_async(&mut self.connection())
+      .invoke_async(self.connection())
       .await?;
     if let Some(t) = reply.ids.pop() {
       return Ok(Some(t.into()));
@@ -189,7 +184,10 @@ impl Storage for Store {
     Ok(None)
   }
 
-  async fn collect(&self) -> Result<Task, Self::Error> {
+  async fn collect(&mut self) -> Result<Task, Self::Error> {
+    // TODO Do not clone
+    let key = self.key.clone();
+
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
@@ -197,7 +195,7 @@ impl Storage for Store {
 
     let mut reply: StreamReadReply = self
       .connection()
-      .xread_options(&[self.key.as_ref()], &[">"], opts)
+      .xread_options(&[key.as_ref()], &[">"], opts)
       .await?;
     // This never panicks as we block until getting a reply, and it
     // always has one single value
@@ -205,7 +203,7 @@ impl Storage for Store {
     Ok(t.into())
   }
 
-  async fn ack(&self, task_id: &str, queue: &str) -> Result<usize, Self::Error> {
+  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, Self::Error> {
     let key = generate_key(queue);
     self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
   }

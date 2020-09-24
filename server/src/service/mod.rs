@@ -4,27 +4,28 @@ mod store;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, Consumer};
+use stub::tasks::{AcknowledgeRequest, Consumer, CreateRequest, CreateResponse, Empty};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
 use store::{Storage, Store};
+use tokio::sync::Mutex;
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
-  store: Store,
+  store: Mutex<Store>,
   ack_manager: AckManager,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
     let store = Store::new().connect().await?.pop().unwrap();
-    let ack_manager = AckManager::init(store.clone()).await?;
-
+    let ack_manager = AckManager::init(store).await?;
+    let store = Store::new().connect().await?.pop().unwrap();
     Ok(TasksCoreServer::new(TasksService {
-      store,
+      store: Mutex::new(store),
       ack_manager,
     }))
   }
@@ -40,8 +41,8 @@ impl TasksCore for TasksService {
       return Err(Status::invalid_argument("No task defined"));
     }
 
-    self
-      .store
+    let mut store = self.store.lock().await;
+    store
       .create_task(task.unwrap())
       .await
       .map(|r| {
@@ -64,11 +65,7 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
-    let dispatcher = Dispatcher::init(
-      request.into_inner(),
-      self.ack_manager.clone(),
-    )
-    .await?;
+    let dispatcher = Dispatcher::init(request.into_inner(), self.ack_manager.clone()).await?;
 
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
     Ok(Response::new(tasks_stream))
