@@ -90,10 +90,10 @@ impl DispatchBuilder {
     let dispatcher = dispatcher.start().await?;
     let (tx, rx) = mpsc::channel(n);
 
-    for store in self.stores.into_iter() {
+    for store in self.stores {
       let conn_id = store.conn_id();
       let worker = DispatchWorker {
-        store: store,
+        store,
         ack_manager: self.ack_manager.clone(),
         tx: tx.clone(),
         master: dispatcher.clone(),
@@ -123,7 +123,7 @@ impl DispatchBuilder {
   }
 
   async fn init_store(consumer: Consumer) -> Result<(Vec<Store>, Connection), StoreError> {
-    let mut stores = Store::new().for_consumer(consumer).connect().await?;
+    let mut stores = Store::build().for_consumer(consumer).connect().await?;
     let master_conn = connection().await?;
     if let Err(e) = stores[0].create_queue().await {
       if let Some(c) = e.code() {

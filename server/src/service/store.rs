@@ -129,7 +129,7 @@ pub struct Store {
 }
 
 impl Store {
-  pub fn new() -> Builder {
+  pub fn build() -> Builder {
     Builder::default()
   }
 
