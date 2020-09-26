@@ -10,12 +10,12 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{Storage, Store, Single};
+use store::{RedisDriver, Store};
 use tokio::sync::Mutex;
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
-  store: Mutex<Store<Single>>,
+  store: Mutex<Store>,
   ack_manager: AckManager,
 }
 

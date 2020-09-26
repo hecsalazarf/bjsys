@@ -1,22 +1,16 @@
-use super::stub::tasks::{Consumer, Task};
+use super::stub::tasks::Task;
 use redis::{
   aio::ConnectionLike,
   streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
-use std::sync::Arc;
 use tokio::{stream::StreamExt, sync::mpsc::unbounded_channel};
 
+pub use redis::aio::{Connection as SingleConnection, MultiplexedConnection};
 pub use redis::RedisError as StoreError;
-pub use redis::aio::{Connection as Single, MultiplexedConnection as Multiplexed};
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
-
-/* enum ConnectionKind {
-  Single,
-  Multiplexed
-} */
 
 pub struct Connection<T: ConnectionLike> {
   id: usize,
@@ -36,7 +30,7 @@ impl<T: ConnectionLike> Connection<T> {
   }
 }
 
-pub async fn connection() -> Result<Connection<Single>, StoreError> {
+pub async fn connection() -> Result<Connection<SingleConnection>, StoreError> {
   // TODO: Retrieve connection info from configuration
   let conn_info = ConnectionInfo {
     db: 0,
@@ -55,109 +49,8 @@ pub async fn connection() -> Result<Connection<Single>, StoreError> {
 }
 
 #[tonic::async_trait]
-pub trait Storage {
-  type CreateResult: Send + Sized;
-  type Error: std::error::Error;
-  async fn create_task(&mut self, task: Task) -> Result<Self::CreateResult, Self::Error>;
-  async fn create_queue(&mut self) -> Result<(), Self::Error>;
-  async fn get_pending(&mut self) -> Result<Option<Task>, Self::Error>;
-  async fn collect(&mut self) -> Result<Task, Self::Error>;
-  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, Self::Error>;
-}
-
-pub struct Builder {
-  queue: String,
-  consumer: String,
-  key: String,
-  workers: usize,
-}
-
-impl Default for Builder {
-  fn default() -> Self {
-    Self {
-      queue: String::default(),
-      consumer: String::default(),
-      key: String::default(),
-      workers: 1,
-    }
-  }
-}
-
-impl Builder {
-  pub fn for_consumer(mut self, consumer: Consumer) -> Self {
-    self.key = generate_key(&consumer.queue);
-    self.queue = consumer.queue;
-    self.consumer = consumer.hostname;
-    self.workers = consumer.workers as usize;
-    self
-  }
-
-  pub async fn connect(self) -> Result<Vec<Store<Single>>, StoreError> {
-    let queue = Arc::new(self.queue);
-    let key = Arc::new(self.key);
-
-    let (tx, rx) = unbounded_channel();
-    // Create connection for each worker concurrently
-    for i in 0..self.workers {
-      let consumer = format!("{}-{}", self.consumer, i);
-      let txc = tx.clone();
-      tokio::spawn(async move {
-        let conn = connection().await.map(|c| (c, consumer));
-        // We don't care if it fails
-        txc.send(conn).unwrap_or(());
-      });
-    }
-    // Drop the first sender, so that stream does not block indefinitely
-    drop(tx);
-
-    // Map Result to append connection and consumer to each Store
-    let map = rx.map(|r| {
-      r.map(|(conn, consumer)| Store {
-        conn,
-        script: ScriptStore::new(),
-        queue: queue.clone(),
-        consumer: Arc::new(consumer),
-        key: key.clone(),
-      })
-    });
-
-    // Wait for all connections, fail at first error
-    map.collect().await
-  }
-}
-
-pub fn build () -> Builder {
-  Builder::default()
-}
-
-pub struct Store<T: ConnectionLike> {
-  conn: Connection<T>,
-  queue: Arc<String>,
-  consumer: Arc<String>,
-  key: Arc<String>,
-  script: &'static ScriptStore,
-}
-
-impl<T: ConnectionLike> Store<T> {
-
-  pub fn conn_id(&self) -> usize {
-    self.conn.id
-  }
-
-  pub fn queue(&self) -> &str {
-    self.queue.as_ref()
-  }
-
-  fn connection(&mut self) -> &mut impl ConnectionLike {
-    &mut self.conn.inner
-  }
-}
-
-#[tonic::async_trait]
-impl<T: ConnectionLike + Send> Storage for Store<T> {
-  type CreateResult = String;
-  type Error = StoreError;
-  async fn create_task(&mut self, task: Task) -> Result<Self::CreateResult, Self::Error> {
+pub trait RedisDriver: RedisStorage {
+  async fn create_task(&mut self, task: Task) -> Result<String, StoreError> {
     let key = generate_key(&task.queue);
     self
       .connection()
@@ -165,24 +58,20 @@ impl<T: ConnectionLike + Send> Storage for Store<T> {
       .await
   }
 
-  async fn create_queue(&mut self) -> Result<(), Self::Error> {
-    // TODO Do not clone
-    let key = self.key.clone();
+  async fn create_queue(&mut self, key: &str) -> Result<(), StoreError> {
     self
       .connection()
-      .xgroup_create_mkstream(key.as_ref(), DEFAULT_GROUP, 0)
+      .xgroup_create_mkstream(key, DEFAULT_GROUP, 0)
       .await
   }
 
-  async fn get_pending(&mut self) -> Result<Option<Task>, Self::Error> {
-    let key = self.key.as_ref();
-
+  async fn get_pending(&mut self, key: &str, consumer: &str) -> Result<Option<Task>, StoreError> {
     let mut reply: StreamRangeReply = self
-      .script
+      .script()
       .pending_task()
       .key(key)
       .arg(DEFAULT_GROUP)
-      .arg(self.consumer.as_ref())
+      .arg(consumer)
       .invoke_async(self.connection())
       .await?;
     if let Some(t) = reply.ids.pop() {
@@ -191,18 +80,16 @@ impl<T: ConnectionLike + Send> Storage for Store<T> {
     Ok(None)
   }
 
-  async fn collect(&mut self) -> Result<Task, Self::Error> {
+  async fn collect(&mut self, key: &str, consumer: &str) -> Result<Task, StoreError> {
     // TODO Do not clone
-    let key = self.key.clone();
-
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
-      .group(DEFAULT_GROUP, self.consumer.as_ref());
+      .group(DEFAULT_GROUP, consumer);
 
     let mut reply: StreamReadReply = self
       .connection()
-      .xread_options(&[key.as_ref()], &[">"], opts)
+      .xread_options(&[key], &[">"], opts)
       .await?;
     // This never panicks as we block until getting a reply, and it
     // always has one single value
@@ -210,10 +97,77 @@ impl<T: ConnectionLike + Send> Storage for Store<T> {
     Ok(t.into())
   }
 
-  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, Self::Error> {
-    let key = generate_key(queue);
+  async fn ack(&mut self, key: &str, task_id: &str) -> Result<usize, StoreError> {
     self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
   }
+}
+
+pub trait RedisStorage: Sync {
+  type Connection: ConnectionLike + Send;
+
+  fn connection(&mut self) -> &mut Self::Connection;
+  fn script(&self) -> &'static ScriptStore;
+  fn conn_id(&self) -> usize;
+}
+
+pub struct Store {
+  conn: Connection<SingleConnection>,
+  script: &'static ScriptStore,
+}
+
+impl RedisDriver for Store {}
+
+impl RedisStorage for Store {
+  type Connection = SingleConnection;
+  fn connection(&mut self) -> &mut Self::Connection {
+    &mut self.conn.inner
+  }
+
+  fn script(&self) -> &'static ScriptStore {
+    self.script
+  }
+
+  fn conn_id(&self) -> usize {
+    self.conn.id
+  }
+}
+
+pub struct Builder {
+  workers: usize,
+}
+
+impl Default for Builder {
+  fn default() -> Self {
+    Self { workers: 1 }
+  }
+}
+
+impl Builder {
+  pub async fn connect(self) -> Result<Vec<Store>, StoreError> {
+    let (tx, rx) = unbounded_channel();
+    // Create connection for each worker concurrently
+    for _ in 0..self.workers {
+      // let consumer = format!("{}-{}", self.consumer, i);
+      let txc = tx.clone();
+      tokio::spawn(async move {
+        let conn_res = connection().await.map(|conn| Store {
+          conn,
+          script: ScriptStore::new(),
+        });
+        // We don't care if it fails
+        txc.send(conn_res).unwrap_or(());
+      });
+    }
+    // Drop the first sender, so that stream does not block indefinitely
+    drop(tx);
+
+    // Wait for all connections, fail at first error
+    rx.collect().await
+  }
+}
+
+pub fn build() -> Builder {
+  Builder::default()
 }
 
 impl From<StreamId> for Task {
@@ -250,7 +204,7 @@ const PENDING_SCRIPT: &str = r"
 
 const PENDING_NAME: &str = "PENDING_SCRIPT";
 
-struct ScriptStore {
+pub struct ScriptStore {
   scripts: Option<HashMap<&'static str, Script>>,
 }
 
