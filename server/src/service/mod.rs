@@ -10,20 +10,20 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{Storage, Store};
+use store::{Storage, Store, Single};
 use tokio::sync::Mutex;
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
-  store: Mutex<Store>,
+  store: Mutex<Store<Single>>,
   ack_manager: AckManager,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let store = Store::build().connect().await?.pop().unwrap();
+    let store = store::build().connect().await?.pop().unwrap();
     let ack_manager = AckManager::init(store).await?;
-    let store = Store::build().connect().await?.pop().unwrap();
+    let store = store::build().connect().await?.pop().unwrap();
     Ok(TasksCoreServer::new(TasksService {
       store: Mutex::new(store),
       ack_manager,

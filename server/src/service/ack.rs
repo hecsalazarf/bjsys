@@ -1,4 +1,4 @@
-use super::store::{Storage, Store};
+use super::store::{Storage, Store, Single};
 use super::stub::tasks::AcknowledgeRequest;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -14,7 +14,7 @@ pub struct AckManager {
 }
 
 impl AckManager {
-  pub async fn init(store: Store) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(store: Store<Single>) -> Result<Self, Box<dyn std::error::Error>> {
     let worker = AckWorker::new(store).start().await?;
     Ok(Self { worker })
   }
@@ -47,11 +47,11 @@ struct Acknowledge(AcknowledgeRequest);
 
 struct AckWorker {
   tasks: HashMap<Arc<String>, Arc<Notify>>,
-  store: Store,
+  store: Store<Single>,
 }
 
 impl AckWorker {
-  pub fn new(store: Store) -> Self {
+  pub fn new(store: Store<Single>) -> Self {
     Self {
       tasks: HashMap::new(),
       store,

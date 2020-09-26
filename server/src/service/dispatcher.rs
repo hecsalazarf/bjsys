@@ -1,5 +1,5 @@
 use super::ack::{AckManager, WaitingTask};
-use super::store::{connection, Connection, Storage, Store, StoreError};
+use super::store::{self, connection, Connection, Storage, Store, StoreError, Single};
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError,
 
 pub struct Dispatcher {
   workers: Vec<(usize, Addr<DispatchWorker>)>,
-  master_conn: Connection,
+  master_conn: Connection<Single>,
   waiting_tasks: HashSet<WaitingTask>,
   name: String,
 }
@@ -72,9 +72,9 @@ impl Handler<DispatcherCmd> for Dispatcher {
 }
 
 pub struct DispatchBuilder {
-  stores: Vec<Store>,
+  stores: Vec<Store<Single>>,
   ack_manager: AckManager,
-  master_conn: Connection,
+  master_conn: Connection<Single>,
   name: String,
 }
 
@@ -122,9 +122,9 @@ impl DispatchBuilder {
     })
   }
 
-  async fn init_store(consumer: Consumer) -> Result<(Vec<Store>, Connection), StoreError> {
-    let mut stores = Store::build().for_consumer(consumer).connect().await?;
-    let master_conn = connection().await?;
+  async fn init_store(consumer: Consumer) -> Result<(Vec<Store<Single>>, Connection<Single>), StoreError> {
+    let mut stores = store::build().for_consumer(consumer).connect().await?;
+    let master_conn= connection().await?;
     if let Err(e) = stores[0].create_queue().await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
@@ -148,7 +148,7 @@ enum WorkerCmd {
 }
 
 struct DispatchWorker {
-  store: Store,
+  store: Store<Single>,
   ack_manager: AckManager,
   tx: mpsc::Sender<Result<Task, Status>>,
   master: Addr<Dispatcher>,

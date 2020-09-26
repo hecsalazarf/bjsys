@@ -1,6 +1,6 @@
 use super::stub::tasks::{Consumer, Task};
 use redis::{
-  aio::Connection as AsyncConnection,
+  aio::ConnectionLike,
   streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
@@ -8,16 +8,22 @@ use std::sync::Arc;
 use tokio::{stream::StreamExt, sync::mpsc::unbounded_channel};
 
 pub use redis::RedisError as StoreError;
+pub use redis::aio::{Connection as Single, MultiplexedConnection as Multiplexed};
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
 
-pub struct Connection {
+/* enum ConnectionKind {
+  Single,
+  Multiplexed
+} */
+
+pub struct Connection<T: ConnectionLike> {
   id: usize,
-  inner: AsyncConnection,
+  inner: T,
 }
 
-impl Connection {
+impl<T: ConnectionLike> Connection<T> {
   pub async fn kill<I: Iterator<Item = usize>>(conn: &mut Self, ids: I) {
     let mut pipe = &mut redis::pipe();
     for id in ids {
@@ -30,7 +36,7 @@ impl Connection {
   }
 }
 
-pub async fn connection() -> Result<Connection, StoreError> {
+pub async fn connection() -> Result<Connection<Single>, StoreError> {
   // TODO: Retrieve connection info from configuration
   let conn_info = ConnectionInfo {
     db: 0,
@@ -86,7 +92,7 @@ impl Builder {
     self
   }
 
-  pub async fn connect(self) -> Result<Vec<Store>, StoreError> {
+  pub async fn connect(self) -> Result<Vec<Store<Single>>, StoreError> {
     let queue = Arc::new(self.queue);
     let key = Arc::new(self.key);
 
@@ -120,18 +126,19 @@ impl Builder {
   }
 }
 
-pub struct Store {
-  conn: Connection,
+pub fn build () -> Builder {
+  Builder::default()
+}
+
+pub struct Store<T: ConnectionLike> {
+  conn: Connection<T>,
   queue: Arc<String>,
   consumer: Arc<String>,
   key: Arc<String>,
   script: &'static ScriptStore,
 }
 
-impl Store {
-  pub fn build() -> Builder {
-    Builder::default()
-  }
+impl<T: ConnectionLike> Store<T> {
 
   pub fn conn_id(&self) -> usize {
     self.conn.id
@@ -141,13 +148,13 @@ impl Store {
     self.queue.as_ref()
   }
 
-  fn connection(&mut self) -> &mut AsyncConnection {
+  fn connection(&mut self) -> &mut impl ConnectionLike {
     &mut self.conn.inner
   }
 }
 
 #[tonic::async_trait]
-impl Storage for Store {
+impl<T: ConnectionLike + Send> Storage for Store<T> {
   type CreateResult = String;
   type Error = StoreError;
   async fn create_task(&mut self, task: Task) -> Result<Self::CreateResult, Self::Error> {
