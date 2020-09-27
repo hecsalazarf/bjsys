@@ -1,6 +1,6 @@
 use super::ack::{AckManager, WaitingTask};
 use super::store::{
-  self, connection, Connection, RedisDriver, RedisStorage, SingleConnection, Store, StoreError,
+  connection, Connection, RedisDriver, RedisStorage, SingleConnection, Store, StoreError,
 };
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
@@ -120,10 +120,12 @@ impl DispatchBuilder {
   async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
     let name = consumer.hostname.clone();
     let key = format!("{}_{}", consumer.queue, "pending");
-    let (stores, master_conn) = Self::init_store(&key).await.map_err(|e| {
-      error!("Cannot init dispatcher {}", e);
-      Status::unavailable("unavailable") // TODO: Better error description
-    })?;
+    let (stores, master_conn) = Self::init_store(consumer.workers as usize, &key)
+      .await
+      .map_err(|e| {
+        error!("Cannot init dispatcher {}", e);
+        Status::unavailable("unavailable") // TODO: Better error description
+      })?;
 
     Ok(DispatchBuilder {
       stores,
@@ -134,15 +136,18 @@ impl DispatchBuilder {
     })
   }
 
-  async fn init_store(key: &str) -> Result<(Vec<Store>, Connection<SingleConnection>), StoreError> {
-    let mut stores = store::build().connect().await?;
+  async fn init_store(
+    workers: usize,
+    key: &str,
+  ) -> Result<(Vec<Store>, Connection<SingleConnection>), StoreError> {
+    let mut stores = Store::connect_batch(workers).await?;
     let master_conn = connection().await?;
     if let Err(e) = stores[0].create_queue(key).await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
           debug!(
-            "Queue was not created, exists already",
-            // stores[0].queue()
+            "Queue {} was not created, exists already",
+            key
           );
         }
       } else {

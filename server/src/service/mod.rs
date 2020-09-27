@@ -21,9 +21,9 @@ pub struct TasksService {
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let store = store::build().connect().await?.pop().unwrap();
+    let store = Store::connect().await?;
     let ack_manager = AckManager::init(store).await?;
-    let store = store::build().connect().await?.pop().unwrap();
+    let store = Store::connect().await?;
     Ok(TasksCoreServer::new(TasksService {
       store: Mutex::new(store),
       ack_manager,

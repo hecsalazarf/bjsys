@@ -115,38 +115,21 @@ pub struct Store {
   script: &'static ScriptStore,
 }
 
-impl RedisDriver for Store {}
-
-impl RedisStorage for Store {
-  type Connection = SingleConnection;
-  fn connection(&mut self) -> &mut Self::Connection {
-    &mut self.conn.inner
+impl Store {
+  pub async fn connect() -> Result<Self, StoreError> {
+    connection().await.map(|conn| {
+      let script = ScriptStore::new();
+      Store {
+        conn,
+        script
+      }
+    })
   }
 
-  fn script(&self) -> &'static ScriptStore {
-    self.script
-  }
-
-  fn conn_id(&self) -> usize {
-    self.conn.id
-  }
-}
-
-pub struct Builder {
-  workers: usize,
-}
-
-impl Default for Builder {
-  fn default() -> Self {
-    Self { workers: 1 }
-  }
-}
-
-impl Builder {
-  pub async fn connect(self) -> Result<Vec<Store>, StoreError> {
+  pub async fn connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
     let (tx, rx) = unbounded_channel();
     // Create connection for each worker concurrently
-    for _ in 0..self.workers {
+    for _ in 0..size {
       // let consumer = format!("{}-{}", self.consumer, i);
       let txc = tx.clone();
       tokio::spawn(async move {
@@ -166,8 +149,21 @@ impl Builder {
   }
 }
 
-pub fn build() -> Builder {
-  Builder::default()
+impl RedisDriver for Store {}
+
+impl RedisStorage for Store {
+  type Connection = SingleConnection;
+  fn connection(&mut self) -> &mut Self::Connection {
+    &mut self.conn.inner
+  }
+
+  fn script(&self) -> &'static ScriptStore {
+    self.script
+  }
+
+  fn conn_id(&self) -> usize {
+    self.conn.id
+  }
 }
 
 impl From<StreamId> for Task {
