@@ -1,4 +1,4 @@
-use super::store::{RedisDriver, Store};
+use super::store::{RedisDriver, MultiplexedStore};
 use super::stub::tasks::AcknowledgeRequest;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -14,7 +14,7 @@ pub struct AckManager {
 }
 
 impl AckManager {
-  pub async fn init(store: Store) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(store: MultiplexedStore) -> Result<Self, Box<dyn std::error::Error>> {
     let worker = AckWorker::new(store).start().await?;
     Ok(Self { worker })
   }
@@ -47,11 +47,11 @@ struct Acknowledge(AcknowledgeRequest);
 
 struct AckWorker {
   tasks: HashMap<Arc<String>, Arc<Notify>>,
-  store: Store,
+  store: MultiplexedStore,
 }
 
 impl AckWorker {
-  pub fn new(store: Store) -> Self {
+  pub fn new(store: MultiplexedStore) -> Self {
     Self {
       tasks: HashMap::new(),
       store,

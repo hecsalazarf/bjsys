@@ -10,20 +10,19 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{RedisDriver, Store};
+use store::{RedisDriver, MultiplexedStore};
 use tokio::sync::Mutex;
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
-  store: Mutex<Store>,
+  store: Mutex<MultiplexedStore>,
   ack_manager: AckManager,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let store = Store::connect().await?;
-    let ack_manager = AckManager::init(store).await?;
-    let store = Store::connect().await?;
+    let store = MultiplexedStore::connect().await?;
+    let ack_manager = AckManager::init(store.clone()).await?;
     Ok(TasksCoreServer::new(TasksService {
       store: Mutex::new(store),
       ack_manager,

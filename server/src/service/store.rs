@@ -30,6 +30,15 @@ impl<T: ConnectionLike> Connection<T> {
   }
 }
 
+impl Clone for Connection<MultiplexedConnection> {
+  fn clone(&self) -> Self {
+    Self {
+      id: self.id,
+      inner: self.inner.clone(),
+    }
+  }
+}
+
 pub async fn connection() -> Result<Connection<SingleConnection>, StoreError> {
   // TODO: Retrieve connection info from configuration
   let conn_info = ConnectionInfo {
@@ -40,6 +49,25 @@ pub async fn connection() -> Result<Connection<SingleConnection>, StoreError> {
   };
 
   let mut inner = Client::open(conn_info)?.get_async_connection().await?;
+  let id = redis::cmd("CLIENT")
+    .arg("ID")
+    .query_async(&mut inner)
+    .await?;
+
+  Ok(Connection { id, inner })
+}
+
+// TODO Dedup code
+async fn multiplex_connection() -> Result<Connection<MultiplexedConnection>, StoreError> {
+  // TODO: Retrieve connection info from configuration
+  let conn_info = ConnectionInfo {
+    db: 0,
+    addr: Box::new(ConnectionAddr::Tcp("127.0.0.1".to_owned(), 6380)),
+    username: None,
+    passwd: None,
+  };
+
+  let mut inner = Client::open(conn_info)?.get_multiplexed_async_connection().await?;
   let id = redis::cmd("CLIENT")
     .arg("ID")
     .query_async(&mut inner)
@@ -116,10 +144,10 @@ pub struct Store {
 }
 
 impl Store {
-  pub async fn connect() -> Result<Self, StoreError> {
+  pub async fn _connect() -> Result<Self, StoreError> {
     connection().await.map(|conn| {
       let script = ScriptStore::new();
-      Store {
+      Self {
         conn,
         script
       }
@@ -153,6 +181,41 @@ impl RedisDriver for Store {}
 
 impl RedisStorage for Store {
   type Connection = SingleConnection;
+  fn connection(&mut self) -> &mut Self::Connection {
+    &mut self.conn.inner
+  }
+
+  fn script(&self) -> &'static ScriptStore {
+    self.script
+  }
+
+  fn conn_id(&self) -> usize {
+    self.conn.id
+  }
+}
+
+#[derive(Clone)]
+pub struct MultiplexedStore {
+  conn: Connection<MultiplexedConnection>,
+  script: &'static ScriptStore,
+}
+
+impl MultiplexedStore {
+  pub async fn connect() -> Result<Self, StoreError> {
+    multiplex_connection().await.map(|conn| {
+      let script = ScriptStore::new();
+      Self {
+        conn,
+        script
+      }
+    })
+  }
+}
+
+impl RedisDriver for MultiplexedStore {}
+
+impl RedisStorage for MultiplexedStore {
+  type Connection = MultiplexedConnection;
   fn connection(&mut self) -> &mut Self::Connection {
     &mut self.conn.inner
   }
