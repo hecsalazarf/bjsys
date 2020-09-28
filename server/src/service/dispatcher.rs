@@ -1,7 +1,5 @@
 use super::ack::{AckManager, WaitingTask};
-use super::store::{
-  connection, Connection, RedisDriver, RedisStorage, SingleConnection, Store, StoreError,
-};
+use super::store::{Connection, RedisDriver, RedisStorage, SingleConnection, Store, StoreError};
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
 use std::collections::HashSet;
@@ -141,14 +139,11 @@ impl DispatchBuilder {
     key: &str,
   ) -> Result<(Vec<Store>, Connection<SingleConnection>), StoreError> {
     let mut stores = Store::connect_batch(workers).await?;
-    let master_conn = connection().await?;
+    let master_conn = Connection::start().await?;
     if let Err(e) = stores[0].create_queue(key).await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
-          debug!(
-            "Queue {} was not created, exists already",
-            key
-          );
+          debug!("Queue {} was not created, exists already", key);
         }
       } else {
         return Err(e);
