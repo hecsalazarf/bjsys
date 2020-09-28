@@ -57,6 +57,10 @@ impl<C: InnerConnection> Connection<C> {
     Ok(Connection { id, inner })
   }
 
+  pub fn id(&self) -> usize {
+    self.id
+  }
+
   pub async fn kill<I: Iterator<Item = usize>>(conn: &mut Self, ids: I) {
     let mut pipe = &mut redis::pipe();
     for id in ids {
@@ -79,7 +83,12 @@ impl Clone for Connection<MultiplexedConnection> {
 }
 
 #[tonic::async_trait]
-pub trait RedisDriver: RedisStorage {
+pub trait RedisStorage: Sized + Sync {
+  type Connection: InnerConnection + Send;
+
+  fn connection(&mut self) -> &mut Self::Connection;
+  fn script(&self) -> &'static ScriptStore;
+
   async fn create_task(&mut self, task: Task) -> Result<String, StoreError> {
     let key = generate_key(&task.queue);
     self
@@ -111,7 +120,6 @@ pub trait RedisDriver: RedisStorage {
   }
 
   async fn collect(&mut self, key: &str, consumer: &str) -> Result<Task, StoreError> {
-    // TODO Do not clone
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
@@ -130,14 +138,6 @@ pub trait RedisDriver: RedisStorage {
   async fn ack(&mut self, key: &str, task_id: &str) -> Result<usize, StoreError> {
     self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
   }
-}
-
-pub trait RedisStorage: Sync {
-  type Connection: InnerConnection + Send;
-
-  fn connection(&mut self) -> &mut Self::Connection;
-  fn script(&self) -> &'static ScriptStore;
-  fn conn_id(&self) -> usize;
 }
 
 pub struct Store {
@@ -173,9 +173,11 @@ impl Store {
     // Wait for all connections, fail at first error
     rx.collect().await
   }
-}
 
-impl RedisDriver for Store {}
+  pub fn id(&self) -> usize {
+    self.conn.id()
+  }
+}
 
 impl RedisStorage for Store {
   type Connection = SingleConnection;
@@ -185,10 +187,6 @@ impl RedisStorage for Store {
 
   fn script(&self) -> &'static ScriptStore {
     self.script
-  }
-
-  fn conn_id(&self) -> usize {
-    self.conn.id
   }
 }
 
@@ -207,8 +205,6 @@ impl MultiplexedStore {
   }
 }
 
-impl RedisDriver for MultiplexedStore {}
-
 impl RedisStorage for MultiplexedStore {
   type Connection = MultiplexedConnection;
   fn connection(&mut self) -> &mut Self::Connection {
@@ -217,10 +213,6 @@ impl RedisStorage for MultiplexedStore {
 
   fn script(&self) -> &'static ScriptStore {
     self.script
-  }
-
-  fn conn_id(&self) -> usize {
-    self.conn.id
   }
 }
 

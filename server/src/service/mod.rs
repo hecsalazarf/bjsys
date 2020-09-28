@@ -10,7 +10,7 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
-use store::{RedisDriver, MultiplexedStore};
+use store::{MultiplexedStore, RedisStorage};
 use tokio::sync::Mutex;
 
 pub struct TasksService {

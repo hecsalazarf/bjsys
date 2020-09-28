@@ -1,4 +1,4 @@
-use super::store::{RedisDriver, MultiplexedStore};
+use super::store::{RedisStorage, MultiplexedStore};
 use super::stub::tasks::AcknowledgeRequest;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

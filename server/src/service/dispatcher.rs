@@ -1,5 +1,5 @@
 use super::ack::{AckManager, WaitingTask};
-use super::store::{Connection, RedisDriver, RedisStorage, SingleConnection, Store, StoreError};
+use super::store::{Connection, RedisStorage, SingleConnection, Store, StoreError};
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
 use std::collections::HashSet;
@@ -96,7 +96,7 @@ impl DispatchBuilder {
     let mut i: usize = 0;
     for store in self.stores {
       let consumer = format!("{}-{}", &self.name, i);
-      let conn_id = store.conn_id();
+      let conn_id = store.id();
       let worker = DispatchWorker {
         store,
         ack_manager: self.ack_manager.clone(),
@@ -233,7 +233,12 @@ impl DispatchWorker {
   }
 }
 
-impl Actor for DispatchWorker {}
+#[tonic::async_trait]
+impl Actor for DispatchWorker {
+  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
+    // tracing::info!("Worker {} disconnected", self.consumer);
+  }
+}
 
 #[tonic::async_trait]
 impl Handler<WorkerCmd> for DispatchWorker {
