@@ -19,12 +19,44 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-  pub async fn init(
+  pub async fn build(
     consumer: Consumer,
     ack_manager: AckManager,
     master_store: MultiplexedStore,
   ) -> Result<DispatchBuilder, Status> {
-    DispatchBuilder::init(consumer, ack_manager, master_store).await
+    let name = consumer.hostname;
+    let key = format!("{}_{}", consumer.queue, "pending");
+    let workers = consumer.workers as usize;
+
+    let stores = Self::init_store(workers, &key).await.map_err(|e| {
+      error!("Cannot init dispatcher {}", e);
+      Status::unavailable("unavailable") // TODO: Better error description
+    })?;
+
+    let builder = DispatchBuilder {
+      stores,
+      ack_manager,
+      master_store,
+      name,
+      key,
+    };
+
+    Ok(builder)
+  }
+
+  async fn init_store(workers: usize, key: &str) -> Result<Vec<Store>, StoreError> {
+    let mut stores = Store::connect_batch(workers).await?;
+    if let Err(e) = stores[0].create_queue(key).await {
+      if let Some(c) = e.code() {
+        if c == "BUSYGROUP" {
+          debug!("Queue {} was not created, exists already", key);
+        }
+      } else {
+        return Err(e);
+      }
+    }
+
+    Ok(stores)
   }
 }
 
@@ -46,7 +78,7 @@ impl Actor for Dispatcher {
 
   async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
     info!(
-      "Consumer '{}' has connected with {} workers",
+      "Consumer '{}' has connected with {} worker(s)",
       self.name,
       self.workers.capacity()
     );
@@ -117,44 +149,6 @@ impl DispatchBuilder {
       i += 1;
     }
     Ok(TaskStream::new(rx, dispatcher))
-  }
-
-  async fn init(
-    consumer: Consumer,
-    ack_manager: AckManager,
-    master_store: MultiplexedStore,
-  ) -> Result<DispatchBuilder, Status> {
-    let name = consumer.hostname.clone();
-    let key = format!("{}_{}", consumer.queue, "pending");
-    let stores = Self::init_store(consumer.workers as usize, &key)
-      .await
-      .map_err(|e| {
-        error!("Cannot init dispatcher {}", e);
-        Status::unavailable("unavailable") // TODO: Better error description
-      })?;
-
-    Ok(DispatchBuilder {
-      stores,
-      ack_manager,
-      master_store,
-      name,
-      key,
-    })
-  }
-
-  async fn init_store(workers: usize, key: &str) -> Result<Vec<Store>, StoreError> {
-    let mut stores = Store::connect_batch(workers).await?;
-    if let Err(e) = stores[0].create_queue(key).await {
-      if let Some(c) = e.code() {
-        if c == "BUSYGROUP" {
-          debug!("Queue {} was not created, exists already", key);
-        }
-      } else {
-        return Err(e);
-      }
-    }
-
-    Ok(stores)
   }
 }
 

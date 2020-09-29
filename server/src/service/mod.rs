@@ -63,7 +63,7 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
-    let dispatcher = Dispatcher::init(
+    let dispatcher = Dispatcher::build(
       request.into_inner(),
       self.ack_manager.clone(),
       self.store.clone(),
