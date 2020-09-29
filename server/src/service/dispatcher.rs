@@ -1,5 +1,5 @@
 use super::ack::{AckManager, WaitingTask};
-use super::store::{Connection, RedisStorage, SingleConnection, Store, StoreError};
+use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
 use super::stub::tasks::{Consumer, Task};
 use core::task::Poll;
 use std::collections::HashSet;
@@ -13,7 +13,7 @@ use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError,
 
 pub struct Dispatcher {
   workers: Vec<(usize, Addr<DispatchWorker>)>,
-  master_conn: Connection<SingleConnection>,
+  master_store: MultiplexedStore,
   waiting_tasks: HashSet<WaitingTask>,
   name: String,
 }
@@ -22,16 +22,20 @@ impl Dispatcher {
   pub async fn init(
     consumer: Consumer,
     ack_manager: AckManager,
+    master_store: MultiplexedStore,
   ) -> Result<DispatchBuilder, Status> {
-    DispatchBuilder::init(consumer, ack_manager).await
+    DispatchBuilder::init(consumer, ack_manager, master_store).await
   }
 }
 
 #[tonic::async_trait]
 impl Actor for Dispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    // Kill any blocking connection
-    Connection::kill(&mut self.master_conn, self.workers.iter().map(|e| e.0)).await;
+    // Stop any blocking connection
+    self
+      .master_store
+      .stop_by_id(self.workers.iter().map(|e| e.0))
+      .await;
 
     for task in self.waiting_tasks.iter() {
       task.finish();
@@ -75,7 +79,7 @@ impl Handler<DispatcherCmd> for Dispatcher {
 pub struct DispatchBuilder {
   stores: Vec<Store>,
   ack_manager: AckManager,
-  master_conn: Connection<SingleConnection>,
+  master_store: MultiplexedStore,
   name: String,
   key: String,
 }
@@ -85,7 +89,7 @@ impl DispatchBuilder {
     let n = self.stores.len(); // Number of workers
     let dispatcher = Dispatcher {
       workers: Vec::with_capacity(n),
-      master_conn: self.master_conn,
+      master_store: self.master_store,
       waiting_tasks: HashSet::new(),
       name: self.name.clone(),
     };
@@ -115,10 +119,14 @@ impl DispatchBuilder {
     Ok(TaskStream::new(rx, dispatcher))
   }
 
-  async fn init(consumer: Consumer, ack_manager: AckManager) -> Result<DispatchBuilder, Status> {
+  async fn init(
+    consumer: Consumer,
+    ack_manager: AckManager,
+    master_store: MultiplexedStore,
+  ) -> Result<DispatchBuilder, Status> {
     let name = consumer.hostname.clone();
     let key = format!("{}_{}", consumer.queue, "pending");
-    let (stores, master_conn) = Self::init_store(consumer.workers as usize, &key)
+    let stores = Self::init_store(consumer.workers as usize, &key)
       .await
       .map_err(|e| {
         error!("Cannot init dispatcher {}", e);
@@ -128,18 +136,14 @@ impl DispatchBuilder {
     Ok(DispatchBuilder {
       stores,
       ack_manager,
-      master_conn,
+      master_store,
       name,
       key,
     })
   }
 
-  async fn init_store(
-    workers: usize,
-    key: &str,
-  ) -> Result<(Vec<Store>, Connection<SingleConnection>), StoreError> {
+  async fn init_store(workers: usize, key: &str) -> Result<Vec<Store>, StoreError> {
     let mut stores = Store::connect_batch(workers).await?;
-    let master_conn = Connection::start().await?;
     if let Err(e) = stores[0].create_queue(key).await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
@@ -150,7 +154,7 @@ impl DispatchBuilder {
       }
     }
 
-    Ok((stores, master_conn))
+    Ok(stores)
   }
 }
 
@@ -236,7 +240,7 @@ impl DispatchWorker {
 #[tonic::async_trait]
 impl Actor for DispatchWorker {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    // tracing::info!("Worker {} disconnected", self.consumer);
+    debug!("Worker {} disconnected", self.consumer);
   }
 }
 

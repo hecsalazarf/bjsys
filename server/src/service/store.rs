@@ -1,12 +1,11 @@
 use super::stub::tasks::Task;
 use redis::{
-  aio::ConnectionLike,
+  aio::{ConnectionLike, Connection as SingleConnection, MultiplexedConnection},
   streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use tokio::{stream::StreamExt, sync::mpsc};
 
-pub use redis::aio::{Connection as SingleConnection, MultiplexedConnection};
 pub use redis::RedisError as StoreError;
 
 const PENDING_SUFFIX: &str = "pending";
@@ -33,13 +32,13 @@ impl InnerConnection for MultiplexedConnection {
   }
 }
 
-pub struct Connection<C: InnerConnection> {
+struct Connection<C: InnerConnection> {
   id: usize,
   inner: C,
 }
 
 impl<C: InnerConnection> Connection<C> {
-  pub async fn start() -> Result<Connection<C>, StoreError> {
+  async fn start() -> Result<Connection<C>, StoreError> {
     // TODO: Retrieve connection info from configuration
     let conn_info = ConnectionInfo {
       db: 0,
@@ -57,11 +56,11 @@ impl<C: InnerConnection> Connection<C> {
     Ok(Connection { id, inner })
   }
 
-  pub fn id(&self) -> usize {
+  fn id(&self) -> usize {
     self.id
   }
 
-  pub async fn kill<I: Iterator<Item = usize>>(conn: &mut Self, ids: I) {
+  async fn kill(conn: &mut Self, ids: Vec<usize>) {
     let mut pipe = &mut redis::pipe();
     for id in ids {
       pipe = pipe.cmd("CLIENT").arg("KILL").arg("ID").arg(id);
@@ -155,7 +154,7 @@ impl Store {
 
   pub async fn connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
     let (tx, rx) = mpsc::unbounded_channel();
-    // Create connection for each worker concurrently
+    // Create each connection concurrently
     for _ in 0..size {
       let txc = tx.clone();
       tokio::spawn(async move {
@@ -202,6 +201,13 @@ impl MultiplexedStore {
       let script = ScriptStore::new();
       Self { conn, script }
     })
+  }
+
+  pub async fn stop_by_id<I>(&mut self, ids: I)
+  where
+    I: Iterator<Item = usize>,
+  {
+    Connection::kill(&mut self.conn, ids.collect()).await;
   }
 }
 

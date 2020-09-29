@@ -11,11 +11,10 @@ use tracing::{error, info};
 use ack::AckManager;
 use dispatcher::{Dispatcher, TaskStream};
 use store::{MultiplexedStore, RedisStorage};
-use tokio::sync::Mutex;
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
-  store: Mutex<MultiplexedStore>,
+  store: MultiplexedStore,
   ack_manager: AckManager,
 }
 
@@ -24,7 +23,7 @@ impl TasksService {
     let store = MultiplexedStore::connect().await?;
     let ack_manager = AckManager::init(store.clone()).await?;
     Ok(TasksCoreServer::new(TasksService {
-      store: Mutex::new(store),
+      store: store,
       ack_manager,
     }))
   }
@@ -40,7 +39,7 @@ impl TasksCore for TasksService {
       return Err(Status::invalid_argument("No task defined"));
     }
 
-    let mut store = self.store.lock().await;
+    let mut store = self.store.clone();
     store
       .create_task(task.unwrap())
       .await
@@ -64,7 +63,12 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
-    let dispatcher = Dispatcher::init(request.into_inner(), self.ack_manager.clone()).await?;
+    let dispatcher = Dispatcher::init(
+      request.into_inner(),
+      self.ack_manager.clone(),
+      self.store.clone(),
+    )
+    .await?;
 
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
     Ok(Response::new(tasks_stream))
