@@ -1,6 +1,6 @@
 use super::stub::tasks::Task;
 use redis::{
-  aio::{ConnectionLike, Connection as SingleConnection, MultiplexedConnection},
+  aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
@@ -92,7 +92,15 @@ pub trait RedisStorage: Sized + Sync {
     let key = generate_key(&task.queue);
     self
       .connection()
-      .xadd(key, "*", &[("kind", &task.kind), ("data", &task.data)])
+      .xadd(
+        key,
+        "*",
+        &[
+          ("kind", &task.kind),
+          ("data", &task.data),
+          ("queue", &task.queue),
+        ],
+      )
       .await
   }
 
@@ -227,12 +235,13 @@ impl From<StreamId> for Task {
   fn from(s: StreamId) -> Self {
     let kind = s.get("kind").unwrap_or_default();
     let data = s.get("data").unwrap_or_default();
+    let queue = s.get("queue").unwrap_or_default();
     let id = s.id;
 
     Task {
       id,
       kind,
-      queue: String::new(),
+      queue,
       data,
     }
   }
