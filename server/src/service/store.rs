@@ -134,7 +134,8 @@ pub trait RedisStorage: Sized + Sync {
     Ok(t.into())
   }
 
-  async fn ack(&mut self, key: &str, task_id: &str) -> Result<usize, StoreError> {
+  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
+    let key = generate_key(&queue);
     self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
   }
 }
