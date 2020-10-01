@@ -35,7 +35,9 @@ impl App {
 
   pub async fn listen(self) {
     info!("Starting server");
-    if let Err(e) = self.router.serve("0.0.0.0:11000".parse().unwrap()).await {
+    let addr = "0.0.0.0:11000".parse().unwrap();
+    let signal = TasksService::exit_signal();
+    if let Err(e) = self.router.serve_with_shutdown(addr, signal).await {
       error_and_exit(e);
     }
   }

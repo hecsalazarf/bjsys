@@ -27,6 +27,17 @@ impl TasksService {
       ack_manager,
     }))
   }
+
+  pub fn exit_signal() -> impl std::future::Future<Output = ()> {
+    use xactor::Service;
+    let signal = async {
+      tokio::signal::ctrl_c().await.unwrap();
+      info!("Shutting down...");
+      let mut addr = xactor::Broker::from_registry().await.unwrap();
+      addr.publish(ServiceCmd::Shutdown).unwrap();
+    };
+    signal
+  }
 }
 
 type ServiceResult<T> = Result<Response<T>, Status>;
@@ -73,4 +84,10 @@ impl TasksCore for TasksService {
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
     Ok(Response::new(tasks_stream))
   }
+}
+
+#[xactor::message]
+#[derive(Clone)]
+pub enum ServiceCmd {
+  Shutdown
 }

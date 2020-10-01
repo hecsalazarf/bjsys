@@ -76,7 +76,8 @@ impl Actor for Dispatcher {
     info!("Consumer '{}' has disconnected", self.name);
   }
 
-  async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+  async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+    ctx.subscribe::<ServiceCmd>().await.expect("sub_to_shut");
     info!(
       "Consumer '{}' has connected with {} worker(s)",
       self.name,
@@ -105,6 +106,19 @@ impl Handler<DispatcherCmd> for Dispatcher {
       }
       DispatcherCmd::Init(conn_id, addr) => self.workers.push((conn_id, addr)), // self.workers.push(a),
     };
+  }
+}
+
+use super::ServiceCmd;
+
+#[tonic::async_trait]
+impl Handler<ServiceCmd> for Dispatcher {
+  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ServiceCmd) {
+    match cmd {
+      ServiceCmd::Shutdown => {
+        ctx.stop(None);
+      }
+    }
   }
 }
 
@@ -267,6 +281,11 @@ impl Stream for TaskStream {
 
 impl Drop for TaskStream {
   fn drop(&mut self) {
-    self.dispatcher.stop(None).expect("drop_dispatcher");
+    self.dispatcher.stop(None).unwrap_or_else(|_| {
+      debug!(
+        "Dispatcher {} was closed earlier",
+        self.dispatcher.actor_id()
+      )
+    });
   }
 }

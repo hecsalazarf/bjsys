@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 tonic = "0.3.1"
 prost = "0.6.1"
-tokio = { version = "0.2.22", features = ["macros", "sync", "stream", "time", "rt-threaded"] }
+tokio = { version = "0.2.22", features = ["macros", "sync", "stream", "time", "rt-threaded", "signal"] }
 tracing = "0.1.19"
 tracing-subscriber = "0.2.11"
 redis = { version = "0.17.0", default-features = false, features = ["tokio-rt-core", "streams", "script"] }
