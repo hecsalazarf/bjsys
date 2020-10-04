@@ -111,6 +111,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "xactor",
 ]
 
 [[package]]

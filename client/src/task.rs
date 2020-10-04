@@ -1,4 +1,4 @@
-use crate::taskstub::Task as TaskStub;
+pub use crate::taskstub::Task as TaskStub;
 use serde::Serialize;
 
 pub use serde_json::Error as DataError;
