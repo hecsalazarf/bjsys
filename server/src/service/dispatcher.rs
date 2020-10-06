@@ -143,9 +143,7 @@ impl DispatchBuilder {
     let (tx, rx) = mpsc::channel(n);
 
     let key = Arc::new(self.key);
-    let mut i: usize = 0;
     for store in self.stores {
-      let consumer = format!("{}-{}", &self.name, i);
       let conn_id = store.id();
       let worker = DispatchWorker {
         store,
@@ -153,14 +151,12 @@ impl DispatchBuilder {
         tx: tx.clone(),
         master: dispatcher.clone(),
         key: key.clone(),
-        consumer,
       };
       let worker_addr = worker.start().await?;
       worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
       dispatcher
         .call(DispatcherCmd::Init(conn_id, worker_addr))
         .await?;
-      i += 1;
     }
     Ok(TaskStream::new(rx, dispatcher))
   }
@@ -177,14 +173,13 @@ struct DispatchWorker {
   tx: mpsc::Sender<Result<Task, Status>>,
   master: Addr<Dispatcher>,
   key: Arc<String>,
-  consumer: String,
 }
 
 impl DispatchWorker {
   async fn wait_new(&mut self) {
     while let Ok(task) = self
       .store
-      .collect(self.key.as_ref(), self.consumer.as_ref())
+      .collect(self.key.as_ref())
       .await
     {
       self.send(task).await;
@@ -224,7 +219,7 @@ impl DispatchWorker {
   async fn fetch(&mut self) {
     match self
       .store
-      .get_pending(self.key.as_ref(), self.consumer.as_ref())
+      .get_pending(self.key.as_ref())
       .await
     {
       Err(e) => {
@@ -248,7 +243,7 @@ impl DispatchWorker {
 #[tonic::async_trait]
 impl Actor for DispatchWorker {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    debug!("Worker {} disconnected", self.consumer);
+    debug!("Worker disconnected");
   }
 }
 

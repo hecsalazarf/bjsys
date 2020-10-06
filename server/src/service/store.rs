@@ -10,6 +10,7 @@ pub use redis::RedisError as StoreError;
 
 const PENDING_SUFFIX: &str = "pending";
 const DEFAULT_GROUP: &str = "default_group";
+const DEFAULT_CONSUMER: &str = "default_consumer";
 
 #[tonic::async_trait]
 pub trait InnerConnection: Sized + ConnectionLike {
@@ -111,13 +112,13 @@ pub trait RedisStorage: Sized + Sync {
       .await
   }
 
-  async fn get_pending(&mut self, key: &str, consumer: &str) -> Result<Option<Task>, StoreError> {
+  async fn get_pending(&mut self, key: &str) -> Result<Option<Task>, StoreError> {
     let mut reply: StreamRangeReply = self
       .script()
       .pending_task()
       .key(key)
       .arg(DEFAULT_GROUP)
-      .arg(consumer)
+      .arg(DEFAULT_CONSUMER)
       .invoke_async(self.connection())
       .await?;
     if let Some(t) = reply.ids.pop() {
@@ -126,11 +127,11 @@ pub trait RedisStorage: Sized + Sync {
     Ok(None)
   }
 
-  async fn collect(&mut self, key: &str, consumer: &str) -> Result<Task, StoreError> {
+  async fn collect(&mut self, key: &str) -> Result<Task, StoreError> {
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
-      .group(DEFAULT_GROUP, consumer);
+      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
 
     let mut reply: StreamReadReply = self
       .connection()
