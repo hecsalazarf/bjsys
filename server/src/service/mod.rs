@@ -9,22 +9,25 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use ack::AckManager;
-use dispatcher::{Dispatcher, TaskStream};
+use dispatcher::{TaskStream, MasterDispatcher};
 use store::{MultiplexedStore, RedisStorage};
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
   store: MultiplexedStore,
   ack_manager: AckManager,
+  dispatcher: MasterDispatcher,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
     let store = MultiplexedStore::connect().await?;
     let ack_manager = AckManager::init(store.clone()).await?;
+    let dispatcher = MasterDispatcher::init(store.clone(), ack_manager.clone()).await;
     Ok(TasksCoreServer::new(TasksService {
       store: store,
       ack_manager,
+      dispatcher
     }))
   }
 
@@ -74,12 +77,9 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
-    let dispatcher = Dispatcher::build(
-      request.into_inner(),
-      self.ack_manager.clone(),
-      self.store.clone(),
-    )
-    .await?;
+    let request = request.into_inner();
+    let queue = request.queue.clone();
+    let dispatcher = self.dispatcher.create(queue).await?;
 
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
     Ok(Response::new(tasks_stream))

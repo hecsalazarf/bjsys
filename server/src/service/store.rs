@@ -155,14 +155,14 @@ pub struct Store {
 }
 
 impl Store {
-  pub async fn _connect() -> Result<Self, StoreError> {
+  pub async fn connect() -> Result<Self, StoreError> {
     Connection::start().await.map(|conn| {
       let script = ScriptStore::new();
       Self { conn, script }
     })
   }
 
-  pub async fn connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
+  pub async fn _connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
     let (tx, rx) = mpsc::unbounded_channel();
     // Create each connection concurrently
     for _ in 0..size {

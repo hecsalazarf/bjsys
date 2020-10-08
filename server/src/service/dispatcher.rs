@@ -1,8 +1,8 @@
 use super::ack::{AckManager, WaitingTask};
 use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
-use super::stub::tasks::{Consumer, Task};
+use super::stub::tasks::Task;
 use core::task::Poll;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -11,42 +11,45 @@ use tonic::Status;
 use tracing::{debug, error, info};
 use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
 
-pub struct Dispatcher {
-  workers: Vec<(usize, Addr<DispatchWorker>)>,
-  master_store: MultiplexedStore,
-  waiting_tasks: HashSet<WaitingTask>,
-  name: String,
+pub struct MasterDispatcher {
+  addr: Addr<MasterWorker>,
 }
 
-impl Dispatcher {
-  pub async fn build(
-    consumer: Consumer,
-    ack_manager: AckManager,
-    master_store: MultiplexedStore,
-  ) -> Result<DispatchBuilder, Status> {
-    let name = consumer.hostname;
-    let key = format!("{}_{}", consumer.queue, "pending");
-    let workers = consumer.workers as usize;
-
-    let stores = Self::init_store(workers, &key).await.map_err(|e| {
-      error!("Cannot init dispatcher {}", e);
-      Status::unavailable("unavailable") // TODO: Better error description
-    })?;
-
-    let builder = DispatchBuilder {
-      stores,
-      ack_manager,
-      master_store,
-      name,
-      key,
+impl MasterDispatcher {
+  pub async fn init(store: MultiplexedStore, ack: AckManager) -> Self {
+    let worker = MasterWorker {
+      dispatchers: HashMap::new(),
+      store,
+      ack,
     };
 
-    Ok(builder)
+    let addr = worker.start().await.expect("dispatcher_failed");
+
+    Self { addr }
   }
 
-  async fn init_store(workers: usize, key: &str) -> Result<Vec<Store>, StoreError> {
-    let mut stores = Store::connect_batch(workers).await?;
-    if let Err(e) = stores[0].create_queue(key).await {
+  pub async fn create(&self, queue: String) -> Result<Dispatcher, Status> {
+    let disp = self
+      .addr
+      .call(QueueName(queue))
+      .await
+      .unwrap()
+      .map_err(|_e| Status::unavailable(""))?;
+
+    Ok(disp)
+  }
+}
+
+pub struct MasterWorker {
+  dispatchers: HashMap<String, Addr<QueueDispatcher>>,
+  store: MultiplexedStore,
+  ack: AckManager,
+}
+
+impl MasterWorker {
+  async fn init_store(key: &str) -> Result<Store, StoreError> {
+    let mut store = Store::connect().await?;
+    if let Err(e) = store.create_queue(key).await {
       if let Some(c) = e.code() {
         if c == "BUSYGROUP" {
           debug!("Queue {} was not created, exists already", key);
@@ -56,23 +59,147 @@ impl Dispatcher {
       }
     }
 
-    Ok(stores)
+    Ok(store)
+  }
+}
+
+#[message(result = "Result<Dispatcher, ActorError>")]
+struct QueueName(String);
+
+impl Actor for MasterWorker {}
+
+#[tonic::async_trait]
+impl Handler<QueueName> for MasterWorker {
+  async fn handle(
+    &mut self,
+    _ctx: &mut ActorContext<Self>,
+    queue: QueueName,
+  ) -> Result<Dispatcher, ActorError> {
+    let queue = queue.0;
+    let ack = self.ack.clone();
+    let key = format!("{}_{}", queue, "pending");
+    let (dispatcher, store) = if self.dispatchers.contains_key(&queue) {
+      let d = self.dispatchers.get(&queue).unwrap().clone();
+      let s = Store::connect().await.unwrap();
+
+      (d, s)
+    } else {
+      let s = MasterWorker::init_store(&key).await.unwrap();
+      let d = QueueDispatcher {
+        workers: HashMap::new(),
+        master_store: self.store.clone(),
+        name: queue,
+      };
+      let d = d.start().await?;
+      (d, s)
+    };
+
+    let dispatcher = Dispatcher {
+      store,
+      dispatcher,
+      ack,
+      key,
+    };
+
+    Ok(dispatcher)
+  }
+}
+
+pub struct Dispatcher {
+  store: Store,
+  dispatcher: Addr<QueueDispatcher>,
+  ack: AckManager,
+  key: String,
+}
+
+impl Dispatcher {
+  pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
+    let conn_id = self.store.id();
+    let store = self.store;
+    let ack = self.ack;
+    let key = self.key;
+    let dispatcher = self.dispatcher;
+    let (tx, rx) = mpsc::channel(1);
+
+    let worker = DispatchWorker {
+      store,
+      ack,
+      tx,
+      master: dispatcher.clone(),
+      key: Arc::new(key),
+    };
+    let _addr = worker.start().await?;
+    _addr.send(WorkerCmd::Fetch).expect("send_fetch");
+    let wr = WorkerRecord {
+      _addr,
+      pending_task: None,
+    };
+    dispatcher
+      .call(DispatcherCmd::Init(conn_id, wr))
+      .await?;
+    Ok(TaskStream::new(rx, dispatcher, conn_id))
+  }
+}
+
+struct WorkerRecord {
+  _addr: Addr<DispatchWorker>,
+  pending_task: Option<WaitingTask>,
+}
+
+pub struct QueueDispatcher {
+  workers: HashMap<usize, WorkerRecord>,
+  master_store: MultiplexedStore,
+  name: String,
+}
+
+impl QueueDispatcher {
+  async fn stop_worker(&mut self, id: usize) -> usize {
+    // Stop any blocking connection
+    self
+      .master_store
+      .stop_by_id(std::iter::once(id))
+      .await;
+
+    // Never fails as it was created before
+    let worker = self.workers.remove(&id).unwrap();
+    if let Some(task) = worker.pending_task {
+      task.finish();
+    }
+
+    self.workers.len()
+  }
+
+  async fn stop_all(&mut self) {
+    // TODO: close all at once
+    for (id, worker) in self.workers.drain() {
+      self
+      .master_store
+      .stop_by_id(std::iter::once(id))
+      .await;
+
+      if let Some(task) = worker.pending_task {
+        task.finish();
+      }
+    }
+  }
+
+  fn add_pending(&mut self, id: usize, task: WaitingTask) {
+    if let Some(w) = self.workers.get_mut(&id) {
+      w.pending_task = Some(task);
+    }
+  }
+
+  fn remove_pending(&mut self, id: usize) {
+    if let Some(w) = self.workers.get_mut(&id) {
+      w.pending_task.take();
+    }
   }
 }
 
 #[tonic::async_trait]
-impl Actor for Dispatcher {
+impl Actor for QueueDispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    // Stop any blocking connection
-    self
-      .master_store
-      .stop_by_id(self.workers.iter().map(|e| e.0))
-      .await;
-
-    for task in self.waiting_tasks.iter() {
-      task.finish();
-    }
-
+    self.stop_all().await;
     info!("Consumer '{}' has disconnected", self.name);
   }
 
@@ -89,22 +216,30 @@ impl Actor for Dispatcher {
 
 #[message]
 enum DispatcherCmd {
-  Add(WaitingTask),
-  Remove(WaitingTask),
-  Init(usize, Addr<DispatchWorker>),
+  Add(usize, WaitingTask),
+  Remove(usize),
+  Init(usize, WorkerRecord),
+  Disconnect(usize),
 }
 
 #[tonic::async_trait]
-impl Handler<DispatcherCmd> for Dispatcher {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
+impl Handler<DispatcherCmd> for QueueDispatcher {
+  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
     match cmd {
-      DispatcherCmd::Add(t) => {
-        self.waiting_tasks.insert(t);
+      DispatcherCmd::Add(id, t) => {
+        self.add_pending(id, t);
       }
-      DispatcherCmd::Remove(t) => {
-        self.waiting_tasks.remove(&t);
+      DispatcherCmd::Remove(id) => {
+        self.remove_pending(id);
       }
-      DispatcherCmd::Init(conn_id, addr) => self.workers.push((conn_id, addr)), // self.workers.push(a),
+      DispatcherCmd::Init(id, addr) => {
+        self.workers.insert(id, addr);
+      }
+      DispatcherCmd::Disconnect(id) => {
+        if self.stop_worker(id).await == 0 {
+          ctx.stop(None);
+        }
+      }
     };
   }
 }
@@ -112,53 +247,13 @@ impl Handler<DispatcherCmd> for Dispatcher {
 use super::ServiceCmd;
 
 #[tonic::async_trait]
-impl Handler<ServiceCmd> for Dispatcher {
+impl Handler<ServiceCmd> for QueueDispatcher {
   async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ServiceCmd) {
     match cmd {
       ServiceCmd::Shutdown => {
         ctx.stop(None);
       }
     }
-  }
-}
-
-pub struct DispatchBuilder {
-  stores: Vec<Store>,
-  ack_manager: AckManager,
-  master_store: MultiplexedStore,
-  name: String,
-  key: String,
-}
-
-impl DispatchBuilder {
-  pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
-    let n = self.stores.len(); // Number of workers
-    let dispatcher = Dispatcher {
-      workers: Vec::with_capacity(n),
-      master_store: self.master_store,
-      waiting_tasks: HashSet::new(),
-      name: self.name.clone(),
-    };
-    let dispatcher = dispatcher.start().await?;
-    let (tx, rx) = mpsc::channel(n);
-
-    let key = Arc::new(self.key);
-    for store in self.stores {
-      let conn_id = store.id();
-      let worker = DispatchWorker {
-        store,
-        ack_manager: self.ack_manager.clone(),
-        tx: tx.clone(),
-        master: dispatcher.clone(),
-        key: key.clone(),
-      };
-      let worker_addr = worker.start().await?;
-      worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
-      dispatcher
-        .call(DispatcherCmd::Init(conn_id, worker_addr))
-        .await?;
-    }
-    Ok(TaskStream::new(rx, dispatcher))
   }
 }
 
@@ -169,19 +264,15 @@ enum WorkerCmd {
 
 struct DispatchWorker {
   store: Store,
-  ack_manager: AckManager,
+  ack: AckManager,
   tx: mpsc::Sender<Result<Task, Status>>,
-  master: Addr<Dispatcher>,
+  master: Addr<QueueDispatcher>,
   key: Arc<String>,
 }
 
 impl DispatchWorker {
   async fn wait_new(&mut self) {
-    while let Ok(task) = self
-      .store
-      .collect(self.key.as_ref())
-      .await
-    {
+    while let Ok(task) = self.store.collect(self.key.as_ref()).await {
       self.send(task).await;
     }
   }
@@ -192,7 +283,8 @@ impl DispatchWorker {
   }
 
   async fn send(&mut self, task: Task) {
-    let notify = self.ack_manager.in_process(task.id.clone());
+    let id = self.store.id();
+    let notify = self.ack.in_process(task.id.clone());
 
     // Call to master may fail when its address has been dropped,
     // which it's posible only when the dispatcher received the stop
@@ -200,7 +292,7 @@ impl DispatchWorker {
     // dropped as well.
     self
       .master
-      .call(DispatcherCmd::Add(notify.clone()))
+      .call(DispatcherCmd::Add(id, notify.clone()))
       .await
       .unwrap_or(());
     self
@@ -211,17 +303,13 @@ impl DispatchWorker {
     notify.wait_to_finish().await;
     self
       .master
-      .call(DispatcherCmd::Remove(notify))
+      .call(DispatcherCmd::Remove(id))
       .await
       .unwrap_or(());
   }
 
   async fn fetch(&mut self) {
-    match self
-      .store
-      .get_pending(self.key.as_ref())
-      .await
-    {
+    match self.store.get_pending(self.key.as_ref()).await {
       Err(e) => {
         error!("Cannot get pending tasks {}", e);
         self
@@ -243,7 +331,7 @@ impl DispatchWorker {
 #[tonic::async_trait]
 impl Actor for DispatchWorker {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    debug!("Worker disconnected");
+    info!("Worker disconnected");
   }
 }
 
@@ -258,12 +346,13 @@ impl Handler<WorkerCmd> for DispatchWorker {
 
 pub struct TaskStream {
   stream: mpsc::Receiver<Result<Task, Status>>,
-  dispatcher: Addr<Dispatcher>,
+  dispatcher: Addr<QueueDispatcher>,
+  id: usize,
 }
 
 impl TaskStream {
-  fn new(stream: mpsc::Receiver<Result<Task, Status>>, dispatcher: Addr<Dispatcher>) -> Self {
-    Self { stream, dispatcher }
+  fn new(stream: mpsc::Receiver<Result<Task, Status>>, dispatcher: Addr<QueueDispatcher>, id: usize) -> Self {
+    Self { stream, dispatcher, id }
   }
 }
 
@@ -276,7 +365,7 @@ impl Stream for TaskStream {
 
 impl Drop for TaskStream {
   fn drop(&mut self) {
-    self.dispatcher.stop(None).unwrap_or_else(|_| {
+    self.dispatcher.send(DispatcherCmd::Disconnect(self.id)).unwrap_or_else(|_| {
       debug!(
         "Dispatcher {} was closed earlier",
         self.dispatcher.actor_id()
