@@ -66,13 +66,18 @@ impl MasterWorker {
 #[message(result = "Result<Dispatcher, ActorError>")]
 struct QueueName(String);
 
+#[message]
+enum MasterCmd {
+  Disconnect(String),
+}
+
 impl Actor for MasterWorker {}
 
 #[tonic::async_trait]
 impl Handler<QueueName> for MasterWorker {
   async fn handle(
     &mut self,
-    _ctx: &mut ActorContext<Self>,
+    ctx: &mut ActorContext<Self>,
     queue: QueueName,
   ) -> Result<Dispatcher, ActorError> {
     let queue = queue.0;
@@ -87,10 +92,12 @@ impl Handler<QueueName> for MasterWorker {
       let s = MasterWorker::init_store(&key).await.unwrap();
       let d = QueueDispatcher {
         workers: HashMap::new(),
-        master_store: self.store.clone(),
-        name: queue,
+        store: self.store.clone(),
+        name: queue.clone(),
+        master: ctx.address(),
       };
       let d = d.start().await?;
+      self.dispatchers.insert(queue, d.clone());
       (d, s)
     };
 
@@ -102,6 +109,17 @@ impl Handler<QueueName> for MasterWorker {
     };
 
     Ok(dispatcher)
+  }
+}
+
+#[tonic::async_trait]
+impl Handler<MasterCmd> for MasterWorker {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: MasterCmd) {
+    match cmd {
+      MasterCmd::Disconnect(queue) => {
+        self.dispatchers.remove(&queue);
+      }
+    }
   }
 }
 
@@ -146,14 +164,15 @@ struct WorkerRecord {
 
 pub struct QueueDispatcher {
   workers: HashMap<usize, WorkerRecord>,
-  master_store: MultiplexedStore,
+  master: Addr<MasterWorker>,
+  store: MultiplexedStore,
   name: String,
 }
 
 impl QueueDispatcher {
   async fn stop_worker(&mut self, id: usize) -> usize {
     // Stop any blocking connection
-    self.master_store.stop_by_id(std::iter::once(id)).await;
+    self.store.stop_by_id(std::iter::once(id)).await;
 
     // Never fails as it was created before
     let worker = self.workers.remove(&id).unwrap();
@@ -173,7 +192,7 @@ impl QueueDispatcher {
     });
 
     // Stop all connections at once
-    self.master_store.stop_by_id(ids).await;
+    self.store.stop_by_id(ids).await;
   }
 
   fn add_pending(&mut self, id: usize, task: WaitingTask) {
@@ -193,6 +212,12 @@ impl QueueDispatcher {
 impl Actor for QueueDispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     self.stop_all().await;
+    // Inform master to drop this address
+    self
+      .master
+      .call(MasterCmd::Disconnect(self.name.clone()))
+      .await
+      .unwrap();
     info!("Consumer '{}' has disconnected", self.name);
   }
 
