@@ -134,9 +134,7 @@ impl Dispatcher {
       _addr,
       pending_task: None,
     };
-    dispatcher
-      .call(DispatcherCmd::Init(conn_id, wr))
-      .await?;
+    dispatcher.call(DispatcherCmd::Init(conn_id, wr)).await?;
     Ok(TaskStream::new(rx, dispatcher, conn_id))
   }
 }
@@ -155,10 +153,7 @@ pub struct QueueDispatcher {
 impl QueueDispatcher {
   async fn stop_worker(&mut self, id: usize) -> usize {
     // Stop any blocking connection
-    self
-      .master_store
-      .stop_by_id(std::iter::once(id))
-      .await;
+    self.master_store.stop_by_id(std::iter::once(id)).await;
 
     // Never fails as it was created before
     let worker = self.workers.remove(&id).unwrap();
@@ -170,17 +165,15 @@ impl QueueDispatcher {
   }
 
   async fn stop_all(&mut self) {
-    // TODO: close all at once
-    for (id, worker) in self.workers.drain() {
-      self
-      .master_store
-      .stop_by_id(std::iter::once(id))
-      .await;
-
+    let ids = self.workers.drain().map(|(id, worker)| {
       if let Some(task) = worker.pending_task {
         task.finish();
       }
-    }
+      id
+    });
+
+    // Stop all connections at once
+    self.master_store.stop_by_id(ids).await;
   }
 
   fn add_pending(&mut self, id: usize, task: WaitingTask) {
@@ -351,8 +344,16 @@ pub struct TaskStream {
 }
 
 impl TaskStream {
-  fn new(stream: mpsc::Receiver<Result<Task, Status>>, dispatcher: Addr<QueueDispatcher>, id: usize) -> Self {
-    Self { stream, dispatcher, id }
+  fn new(
+    stream: mpsc::Receiver<Result<Task, Status>>,
+    dispatcher: Addr<QueueDispatcher>,
+    id: usize,
+  ) -> Self {
+    Self {
+      stream,
+      dispatcher,
+      id,
+    }
   }
 }
 
@@ -365,11 +366,14 @@ impl Stream for TaskStream {
 
 impl Drop for TaskStream {
   fn drop(&mut self) {
-    self.dispatcher.send(DispatcherCmd::Disconnect(self.id)).unwrap_or_else(|_| {
-      debug!(
-        "Dispatcher {} was closed earlier",
-        self.dispatcher.actor_id()
-      )
-    });
+    self
+      .dispatcher
+      .send(DispatcherCmd::Disconnect(self.id))
+      .unwrap_or_else(|_| {
+        debug!(
+          "Dispatcher {} was closed earlier",
+          self.dispatcher.actor_id()
+        )
+      });
   }
 }
