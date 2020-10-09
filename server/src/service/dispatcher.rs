@@ -40,8 +40,13 @@ impl MasterDispatcher {
   }
 }
 
+struct DispatcherRecord {
+  addr: Addr<QueueDispatcher>,
+  key: Arc<String>,
+}
+
 pub struct MasterWorker {
-  dispatchers: HashMap<String, Addr<QueueDispatcher>>,
+  dispatchers: HashMap<String, DispatcherRecord>,
   store: MultiplexedStore,
   ack: AckManager,
 }
@@ -82,23 +87,26 @@ impl Handler<QueueName> for MasterWorker {
   ) -> Result<Dispatcher, ActorError> {
     let queue = queue.0;
     let ack = self.ack.clone();
-    let key = format!("{}_{}", queue, "pending");
-    let (dispatcher, store) = if self.dispatchers.contains_key(&queue) {
-      let d = self.dispatchers.get(&queue).unwrap().clone();
+    let (dispatcher, store, key) = if self.dispatchers.contains_key(&queue) {
+      let r = self.dispatchers.get(&queue).unwrap();
       let s = Store::connect().await.unwrap();
-
-      (d, s)
+      (r.addr.clone(), s, r.key.clone())
     } else {
-      let s = MasterWorker::init_store(&key).await.unwrap();
-      let d = QueueDispatcher {
+      let k = Arc::new(format!("{}_{}", queue, "pending"));
+      let s = MasterWorker::init_store(&k).await.unwrap();
+      let qd = QueueDispatcher {
         workers: HashMap::new(),
         store: self.store.clone(),
         name: queue.clone(),
         master: ctx.address(),
       };
-      let d = d.start().await?;
-      self.dispatchers.insert(queue, d.clone());
-      (d, s)
+      let a = qd.start().await?;
+      let r = DispatcherRecord {
+        addr: a.clone(),
+        key: k.clone(),
+      };
+      self.dispatchers.insert(queue, r);
+      (a, s, k)
     };
 
     let dispatcher = Dispatcher {
@@ -127,7 +135,7 @@ pub struct Dispatcher {
   store: Store,
   dispatcher: Addr<QueueDispatcher>,
   ack: AckManager,
-  key: String,
+  key: Arc<String>,
 }
 
 impl Dispatcher {
@@ -144,7 +152,7 @@ impl Dispatcher {
       ack,
       tx,
       master: dispatcher.clone(),
-      key: Arc::new(key),
+      key,
     };
     let _addr = worker.start().await?;
     _addr.send(WorkerCmd::Fetch).expect("send_fetch");
@@ -218,16 +226,12 @@ impl Actor for QueueDispatcher {
       .call(MasterCmd::Disconnect(self.name.clone()))
       .await
       .unwrap();
-    info!("Consumer '{}' has disconnected", self.name);
+    debug!("Queue '{}' is no longer being served", self.name);
   }
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
     ctx.subscribe::<ServiceCmd>().await.expect("sub_to_shut");
-    info!(
-      "Consumer '{}' has connected with {} worker(s)",
-      self.name,
-      self.workers.capacity()
-    );
+    debug!("Queue '{}' is being dispatched", self.name,);
     Ok(())
   }
 }
@@ -348,8 +352,13 @@ impl DispatchWorker {
 
 #[tonic::async_trait]
 impl Actor for DispatchWorker {
-  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    info!("Worker disconnected");
+  async fn stopped(&mut self, ctx: &mut ActorContext<Self>) {
+    info!("Worker {}[{}] disconnected", self.key, ctx.actor_id());
+  }
+
+  async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+    info!("Worker {}[{}] connected", self.key, ctx.actor_id());
+    Ok(())
   }
 }
 
