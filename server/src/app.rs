@@ -5,7 +5,7 @@ use tonic::transport::{
   Server,
 };
 use tracing::{error, info};
-use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
 type ServiceRouter = Router<TasksCoreServer<TasksService>, Unimplemented>;
@@ -23,7 +23,11 @@ impl App {
 
   pub async fn with_tracing() -> Self {
     let filter = EnvFilter::try_from_default_env()
-      .unwrap_or_else(|_| EnvFilter::from_env("").add_directive(LevelFilter::INFO.into()));
+      // If no env filter is set, default to info level
+      .unwrap_or_else(|_| EnvFilter::new("info"))
+      // Disable hyper and h2 debugging log
+      .add_directive("h2=info".parse().unwrap())
+      .add_directive("hyper=info".parse().unwrap());
 
     tracing_subscriber::fmt()
       .with_env_filter(filter)
