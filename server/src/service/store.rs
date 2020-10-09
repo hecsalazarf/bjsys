@@ -1,7 +1,7 @@
 use super::stub::tasks::Task;
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
+  streams::{StreamId, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use tokio::{stream::StreamExt, sync::mpsc};
@@ -112,19 +112,17 @@ pub trait RedisStorage: Sized + Sync {
       .await
   }
 
-  async fn get_pending(&mut self, key: &str) -> Result<Option<Task>, StoreError> {
-    let mut reply: StreamRangeReply = self
-      .script()
-      .pending_task()
-      .key(key)
-      .arg(DEFAULT_GROUP)
-      .arg(DEFAULT_CONSUMER)
-      .invoke_async(self.connection())
-      .await?;
-    if let Some(t) = reply.ids.pop() {
-      return Ok(Some(t.into()));
-    }
-    Ok(None)
+  async fn get_pending(&mut self, key: &str, count: usize) -> Result<Vec<Task>, StoreError> {
+    let opts = StreamReadOptions::default()
+      .count(count)
+      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
+
+    let mut reply: StreamReadReply = self.connection().xread_options(&[key], &[0], opts).await?;
+
+    // Unwrap never panics as the key exists, otherwise Err is returned on redis xread
+    let ids = reply.keys.pop().unwrap().ids;
+    let tasks = ids.into_iter().map(|r| r.into()).collect();
+    Ok(tasks)
   }
 
   async fn collect(&mut self, key: &str) -> Result<Task, StoreError> {
@@ -289,7 +287,7 @@ impl ScriptStore {
     }
   }
 
-  fn pending_task(&'static self) -> &'static Script {
+  fn _pending_task(&'static self) -> &'static Script {
     self.scripts.as_ref().unwrap().get(PENDING_NAME).unwrap()
   }
 }

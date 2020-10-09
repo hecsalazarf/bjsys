@@ -331,7 +331,7 @@ impl DispatchWorker {
   }
 
   async fn fetch(&mut self) {
-    match self.store.get_pending(self.key.as_ref()).await {
+    match self.store.get_pending(self.key.as_ref(), 1).await {
       Err(e) => {
         error!("Cannot get pending tasks {}", e);
         self
@@ -340,11 +340,12 @@ impl DispatchWorker {
           .await
           .expect("Cannot send pending error");
       }
-      Ok(Some(task)) => {
-        self.send_and_wait(task).await;
-      }
-      Ok(None) => {
-        self.wait_new().await;
+      Ok(mut tasks) => {
+        if let Some(t) = tasks.pop() {
+          self.send_and_wait(t).await;
+        } else {
+          self.wait_new().await;
+        }
       }
     }
   }
