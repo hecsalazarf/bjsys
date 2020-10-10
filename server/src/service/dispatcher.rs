@@ -99,6 +99,8 @@ impl Handler<QueueName> for MasterWorker {
         store: self.store.clone(),
         name: queue.clone(),
         master: ctx.address(),
+        pending: VecDeque::with_capacity(5),
+        still_pending: true,
       };
       let a = qd.start().await?;
       let r = DispatcherRecord {
@@ -170,10 +172,14 @@ struct WorkerRecord {
   pending_task: Option<WaitingTask>,
 }
 
+use std::collections::VecDeque;
+
 pub struct QueueDispatcher {
   workers: HashMap<usize, WorkerRecord>,
   master: Addr<MasterWorker>,
   store: MultiplexedStore,
+  pending: VecDeque<Task>,
+  still_pending: bool,
   name: String,
 }
 
@@ -201,6 +207,19 @@ impl QueueDispatcher {
 
     // Stop all connections at once
     self.store.stop_by_id(ids).await;
+  }
+
+  async fn get_pending(&mut self) -> Result<Option<Task>, StoreError> {
+    if self.pending.is_empty() && self.still_pending {
+      let key = format!("{}_{}", self.name, "pending");
+      let mut tasks = self.store.get_pending(&key, 5).await?;
+      if tasks.len() < 5 {
+        self.still_pending = false;
+      }
+      self.pending.append(&mut tasks);
+    }
+
+    Ok(self.pending.pop_front())
   }
 
   fn add_pending(&mut self, id: usize, task: WaitingTask) {
@@ -279,6 +298,17 @@ impl Handler<ServiceCmd> for QueueDispatcher {
   }
 }
 
+#[message(result = "Result<Option<Task>, StoreError>")]
+struct GetPending;
+
+#[tonic::async_trait]
+impl Handler<GetPending> for QueueDispatcher {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: GetPending) -> Result<Option<Task>, StoreError> {
+    self.get_pending().await
+  }
+}
+
+
 #[message]
 enum WorkerCmd {
   Fetch,
@@ -297,11 +327,6 @@ impl DispatchWorker {
     while let Ok(task) = self.store.collect(self.key.as_ref()).await {
       self.send(task).await;
     }
-  }
-
-  async fn send_and_wait(&mut self, task: Task) {
-    self.send(task).await;
-    self.wait_new().await;
   }
 
   async fn send(&mut self, task: Task) {
@@ -331,23 +356,28 @@ impl DispatchWorker {
   }
 
   async fn fetch(&mut self) {
-    match self.store.get_pending(self.key.as_ref(), 1).await {
-      Err(e) => {
-        error!("Cannot get pending tasks {}", e);
-        self
-          .tx
-          .send(Err(Status::unavailable("unavailable")))
-          .await
-          .expect("Cannot send pending error");
-      }
-      Ok(mut tasks) => {
-        if let Some(t) = tasks.pop() {
-          self.send_and_wait(t).await;
-        } else {
-          self.wait_new().await;
+    loop {
+      let res = self.master.call(GetPending).await;
+      // The result may only fail when master has diopped. In such case, we
+      // break the loop.
+      match res.unwrap_or(Ok(None)) {
+        Err(e) => {
+          error!("Cannot get pending tasks {}", e);
+          self
+            .tx
+            .send(Err(Status::unavailable("unavailable")))
+            .await
+            .expect("Cannot send pending error");
+        }
+        Ok(Some(t)) => {
+          self.send(t).await;
+        }
+        Ok(None) => {
+          break;
         }
       }
     }
+    self.wait_new().await;
   }
 }
 

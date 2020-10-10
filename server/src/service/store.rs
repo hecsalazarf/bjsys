@@ -82,6 +82,8 @@ impl Clone for Connection<MultiplexedConnection> {
   }
 }
 
+use std::collections::VecDeque;
+
 #[tonic::async_trait]
 pub trait RedisStorage: Sized + Sync {
   type Connection: InnerConnection + Send;
@@ -112,7 +114,7 @@ pub trait RedisStorage: Sized + Sync {
       .await
   }
 
-  async fn get_pending(&mut self, key: &str, count: usize) -> Result<Vec<Task>, StoreError> {
+  async fn get_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
     let opts = StreamReadOptions::default()
       .count(count)
       .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
