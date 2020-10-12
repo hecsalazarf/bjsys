@@ -114,12 +114,26 @@ pub trait RedisStorage: Sized + Sync {
       .await
   }
 
-  async fn get_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
+  async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
     let opts = StreamReadOptions::default()
       .count(count)
       .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
 
-    let mut reply: StreamReadReply = self.connection().xread_options(&[key], &[0], opts).await?;
+    self.read_stream(key, "0", opts).await
+  }
+
+  async fn read_new(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
+    let opts = StreamReadOptions::default()
+      .block(0)
+      .count(count)
+      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
+
+    self.read_stream(key, ">", opts).await
+  }
+
+  async fn read_stream(&mut self, key: &str, id: &str, opts: StreamReadOptions) -> Result<VecDeque<Task>, StoreError> {
+
+    let mut reply: StreamReadReply = self.connection().xread_options(&[key], &[id], opts).await?;
 
     // Unwrap never panics as the key exists, otherwise Err is returned on redis xread
     let ids = reply.keys.pop().unwrap().ids;

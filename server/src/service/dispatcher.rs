@@ -209,10 +209,10 @@ impl QueueDispatcher {
     self.store.stop_by_id(ids).await;
   }
 
-  async fn get_pending(&mut self) -> Result<Option<Task>, StoreError> {
+  async fn read_pending(&mut self) -> Result<Option<Task>, StoreError> {
     if self.pending.is_empty() && self.still_pending {
       let key = format!("{}_{}", self.name, "pending");
-      let mut tasks = self.store.get_pending(&key, 5).await?;
+      let mut tasks = self.store.read_pending(&key, 5).await?;
       if tasks.len() < 5 {
         self.still_pending = false;
       }
@@ -304,7 +304,7 @@ struct GetPending;
 #[tonic::async_trait]
 impl Handler<GetPending> for QueueDispatcher {
   async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: GetPending) -> Result<Option<Task>, StoreError> {
-    self.get_pending().await
+    self.read_pending().await
   }
 }
 
