@@ -78,7 +78,7 @@ impl TasksCore for TasksService {
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
     let request = request.into_inner();
-    let queue = request.queue.clone();
+    let queue = request.queue;
     let dispatcher = self.dispatcher.create(queue).await?;
 
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
