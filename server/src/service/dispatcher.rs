@@ -139,26 +139,16 @@ pub struct Dispatcher {
 
 impl Dispatcher {
   pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
-    let ack = self.ack;
-    let dispatcher = self.dispatcher;
-    let reader = self.reader;
-    let queue = self.queue;
-    let (tx, rx) = mpsc::channel(1);
-    let exit = Arc::new(Notify::new());
+    let mut worker = DispatchWorker::from(self);
+    let exit = worker.exit_signal();
+    let dispatcher = worker.dispatcher();
+    let rx = worker.receiver();
 
-    let worker = DispatchWorker {
-      ack,
-      tx,
-      queue,
-      reader,
-      master: dispatcher.clone(),
-      exit: exit.clone(),
-    };
-    let _addr = worker.start().await?;
-    _addr.send(WorkerCmd::Fetch).expect("send_fetch");
-    let id = _addr.actor_id();
+    let addr = worker.start().await?;
+    addr.send(WorkerCmd::Fetch).expect("send_fetch");
+    let id = addr.actor_id();
     let wr = WorkerRecord {
-      _addr,
+      _addr: addr,
       pending_task: None,
       exit,
     };
@@ -200,7 +190,7 @@ impl QueueDispatcher {
   }
 
   async fn stop_all(&mut self) {
-    for worker in self.workers.values_mut() {
+    for worker in self.workers.values() {
       if let Some(ref task) = worker.pending_task {
         task.finish();
       }
@@ -378,6 +368,7 @@ enum WorkerCmd {
 struct DispatchWorker {
   ack: AckManager,
   tx: mpsc::Sender<Result<Task, Status>>,
+  rx: Option<mpsc::Receiver<Result<Task, Status>>>,
   master: Addr<QueueDispatcher>,
   reader: Addr<QueueReader>,
   exit: Arc<Notify>,
@@ -385,6 +376,18 @@ struct DispatchWorker {
 }
 
 impl DispatchWorker {
+  pub fn receiver(&mut self) -> mpsc::Receiver<Result<Task, Status>> {
+    self.rx.take().unwrap()
+  }
+
+  pub fn dispatcher(&mut self) -> Addr<QueueDispatcher> {
+    self.master.clone()
+  }
+
+  pub fn exit_signal(&mut self) -> Arc<Notify> {
+    self.exit.clone()
+  }
+
   async fn send(&mut self, task: Task, id: u64) {
     let notify = self.ack.in_process(task.id.clone());
 
@@ -437,6 +440,28 @@ impl DispatchWorker {
           break;
         }
       };
+    }
+  }
+}
+
+impl From<Dispatcher> for DispatchWorker {
+  fn from(dispatcher: Dispatcher) -> Self {
+    let ack = dispatcher.ack;
+    let reader = dispatcher.reader;
+    let queue = dispatcher.queue;
+    let master = dispatcher.dispatcher;
+    let (tx, rx) = mpsc::channel(1);
+    let rx = Some(rx);
+    let exit = Arc::new(Notify::new());
+
+    Self {
+      ack,
+      tx,
+      rx,
+      queue,
+      reader,
+      master,
+      exit,
     }
   }
 }
