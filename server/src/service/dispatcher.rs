@@ -417,9 +417,13 @@ impl DispatchWorker {
     loop {
       tokio::select! {
         res = self.reader.call(ReadTask) => {
-          // The result may only fail when master has dropped. In such case, we
-          // break the loop.
-          match res.unwrap_or(Ok(None)) {
+          if res.is_err() {
+            // The result may only fail when master has dropped. In such case, we
+            // break the loop.
+            break;
+          }
+  
+          match res.unwrap() {
             Err(e) => {
               error!("Cannot read task {}", e);
               self
@@ -432,7 +436,7 @@ impl DispatchWorker {
               self.send(t, id).await;
             }
             Ok(None) => {
-              break;
+              continue;
             }
           }
         }
