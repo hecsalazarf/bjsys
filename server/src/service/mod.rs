@@ -9,7 +9,7 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use ack::AckManager;
-use dispatcher::{TaskStream, MasterDispatcher};
+use dispatcher::{MasterDispatcher, TaskStream};
 use store::{MultiplexedStore, RedisStorage};
 
 pub struct TasksService {
@@ -27,7 +27,7 @@ impl TasksService {
     Ok(TasksCoreServer::new(TasksService {
       store: store,
       ack_manager,
-      dispatcher
+      dispatcher,
     }))
   }
 
@@ -48,15 +48,20 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl TasksCore for TasksService {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
-    let task = request.into_inner().task;
-    if task.is_none() {
+    let request = request.into_inner();
+    if request.task.is_none() {
       return Err(Status::invalid_argument("No task defined"));
     }
+    let task = request.task.unwrap();
 
     let mut store = self.store.clone();
-    store
-      .create_task(task.unwrap())
-      .await
+    let res = if request.delay > 0 {
+      store.create_delayed_task(task, request.delay).await
+    } else {
+      store.create_task(task).await
+    };
+
+    res
       .map(|r| {
         info!("Task created with id {}", r);
         Response::new(CreateResponse { task_id: r })
@@ -89,5 +94,5 @@ impl TasksCore for TasksService {
 #[xactor::message]
 #[derive(Clone)]
 pub enum ServiceCmd {
-  Shutdown
+  Shutdown,
 }

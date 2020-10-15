@@ -12,6 +12,7 @@ struct KeySuffix;
 
 impl KeySuffix {
   const PENDING: &'static str = "pending";
+  const DELAYED: &'static str = "delayed";
 }
 
 struct StreamDefs;
@@ -93,6 +94,7 @@ impl Clone for Connection<MultiplexedConnection> {
 }
 
 use std::collections::VecDeque;
+use std::time::{Duration, SystemTime};
 
 #[tonic::async_trait]
 pub trait RedisStorage: Sized + Sync {
@@ -115,6 +117,41 @@ pub trait RedisStorage: Sized + Sync {
         ],
       )
       .await
+  }
+
+  async fn create_delayed_task(&mut self, task: Task, delay: u64) -> Result<String, StoreError> {
+    let key = generate_key(&task.queue, KeySuffix::DELAYED);
+    let mut member: String = self
+      .connection()
+      .xadd(
+        &key,
+        "*",
+        &[
+          ("kind", &task.kind),
+          ("data", &task.data),
+          ("queue", &task.queue),
+        ],
+      )
+      .await?;
+
+    let id = member.clone();
+    member.push_str(":");
+    member.push_str(&task.queue);
+    let delay = Duration::from_millis(delay);
+
+    let now = SystemTime::now()
+      .duration_since(SystemTime::UNIX_EPOCH)
+      .unwrap();
+
+    let score = if let Some(d) = now.checked_add(delay) {
+      d.as_millis() as u64
+    } else {
+      u64::MAX
+    };
+
+    self.connection().zadd("delayed", &member, score).await?;
+
+    Ok(id)
   }
 
   async fn create_queue(&mut self, key: &str) -> Result<(), StoreError> {

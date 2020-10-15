@@ -16,6 +16,7 @@ service TasksCore {
 // Create Request
 message CreateRequest {
   Task task = 1;
+  uint64 delay = 2;
 }
 
 // Create Response
