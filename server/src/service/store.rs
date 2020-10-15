@@ -8,9 +8,19 @@ use tokio::{stream::StreamExt, sync::mpsc};
 
 pub use redis::RedisError as StoreError;
 
-const PENDING_SUFFIX: &str = "pending";
-const DEFAULT_GROUP: &str = "default_group";
-const DEFAULT_CONSUMER: &str = "default_consumer";
+struct KeySuffix;
+
+impl KeySuffix {
+  const PENDING: &'static str = "pending";
+}
+
+struct StreamDefs;
+
+impl StreamDefs {
+  const DEFAULT_GROUP: &'static str = "default_group";
+  const DEFAULT_CONSUMER: &'static str = "default_consumer";
+  const NEW_ID: &'static str = ">";
+}
 
 #[tonic::async_trait]
 pub trait InnerConnection: Sized + ConnectionLike {
@@ -92,7 +102,7 @@ pub trait RedisStorage: Sized + Sync {
   fn script(&self) -> &'static ScriptStore;
 
   async fn create_task(&mut self, task: Task) -> Result<String, StoreError> {
-    let key = generate_key(&task.queue);
+    let key = generate_key(&task.queue, KeySuffix::PENDING);
     self
       .connection()
       .xadd(
@@ -110,14 +120,14 @@ pub trait RedisStorage: Sized + Sync {
   async fn create_queue(&mut self, key: &str) -> Result<(), StoreError> {
     self
       .connection()
-      .xgroup_create_mkstream(key, DEFAULT_GROUP, 0)
+      .xgroup_create_mkstream(key, StreamDefs::DEFAULT_GROUP, 0)
       .await
   }
 
   async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
     let opts = StreamReadOptions::default()
       .count(count)
-      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
+      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
 
     self.read_stream(key, "0", opts).await
   }
@@ -126,13 +136,17 @@ pub trait RedisStorage: Sized + Sync {
     let opts = StreamReadOptions::default()
       .block(0)
       .count(count)
-      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
+      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
 
-    self.read_stream(key, ">", opts).await
+    self.read_stream(key, StreamDefs::NEW_ID, opts).await
   }
 
-  async fn read_stream(&mut self, key: &str, id: &str, opts: StreamReadOptions) -> Result<VecDeque<Task>, StoreError> {
-
+  async fn read_stream(
+    &mut self,
+    key: &str,
+    id: &str,
+    opts: StreamReadOptions,
+  ) -> Result<VecDeque<Task>, StoreError> {
     let mut reply: StreamReadReply = self.connection().xread_options(&[key], &[id], opts).await?;
 
     // Unwrap never panics as the key exists, otherwise Err is returned on redis xread
@@ -145,11 +159,11 @@ pub trait RedisStorage: Sized + Sync {
     let opts = StreamReadOptions::default()
       .block(0)
       .count(1)
-      .group(DEFAULT_GROUP, DEFAULT_CONSUMER);
+      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
 
     let mut reply: StreamReadReply = self
       .connection()
-      .xread_options(&[key], &[">"], opts)
+      .xread_options(&[key], &[StreamDefs::NEW_ID], opts)
       .await?;
     // This never panicks as we block until getting a reply, and it
     // always has one single value
@@ -158,8 +172,11 @@ pub trait RedisStorage: Sized + Sync {
   }
 
   async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
-    let key = generate_key(&queue);
-    self.connection().xack(key, DEFAULT_GROUP, &[task_id]).await
+    let key = generate_key(&queue, KeySuffix::PENDING);
+    self
+      .connection()
+      .xack(key, StreamDefs::DEFAULT_GROUP, &[task_id])
+      .await
   }
 }
 
@@ -262,8 +279,8 @@ impl From<StreamId> for Task {
   }
 }
 
-fn generate_key(queue: &str) -> String {
-  format!("{}_{}", queue, PENDING_SUFFIX)
+fn generate_key(queue: &str, suffix: &str) -> String {
+  format!("{}_{}", queue, suffix)
 }
 
 use std::collections::HashMap;
