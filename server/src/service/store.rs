@@ -1,7 +1,7 @@
 use super::stub::tasks::Task;
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  streams::{StreamId, StreamReadOptions, StreamReadReply},
+  streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
 };
 use tokio::{stream::StreamExt, sync::mpsc};
@@ -214,6 +214,57 @@ pub trait RedisStorage: Sized + Sync {
       .connection()
       .xack(key, StreamDefs::DEFAULT_GROUP, &[task_id])
       .await
+  }
+
+  async fn schedule(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
+    let max = SystemTime::now()
+      .duration_since(SystemTime::UNIX_EPOCH)
+      .unwrap()
+      .as_millis() as u64;
+
+    let tasks: Vec<String> = self
+      .connection()
+      .zrangebyscore_limit("delayed", 0, max, 0, limit as isize)
+      .await?;
+
+    if tasks.is_empty() {
+      return Ok(Vec::new());
+    }
+
+    let mut p = redis::pipe();
+    let pipe = p.atomic();
+    for t in tasks {
+      let a: Vec<&str> = t.split(":").collect();
+      pipe
+        .cmd("XRANGE")
+        .arg("myqueue_delayed")
+        .arg(a[0])
+        .arg(a[0]);
+      pipe.cmd("XDEL").arg("myqueue_delayed").arg(a[0]).ignore();
+      pipe.cmd("ZREM").arg("delayed").arg(&t).ignore();
+    }
+    let replies: Vec<StreamRangeReply> = pipe.query_async(self.connection()).await?;
+
+    let mut p = redis::pipe();
+    let pipe = p.atomic();
+    for mut r in replies {
+      let task = r.ids.pop().unwrap();
+      let kind: String = task.get("kind").unwrap();
+      let data: String = task.get("data").unwrap();
+      let queue: String = task.get("queue").unwrap();
+      pipe
+        .cmd("XADD")
+        .arg("myqueue_pending")
+        .arg("*")
+        .arg("kind")
+        .arg(kind)
+        .arg("data")
+        .arg(data)
+        .arg("queue")
+        .arg(queue);
+    }
+
+    pipe.query_async(self.connection()).await
   }
 }
 
