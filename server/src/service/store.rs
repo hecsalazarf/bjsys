@@ -1,8 +1,8 @@
 use super::stub::tasks::Task;
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  streams::{StreamId, StreamRangeReply, StreamReadOptions, StreamReadReply},
-  AsyncCommands, Client, ConnectionAddr, ConnectionInfo, Script,
+  streams::{StreamId, StreamReadOptions, StreamReadReply},
+  AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
 };
 use tokio::{stream::StreamExt, sync::mpsc};
 
@@ -216,55 +216,20 @@ pub trait RedisStorage: Sized + Sync {
       .await
   }
 
-  async fn schedule(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
+  async fn schedule_delayed(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
     let max = SystemTime::now()
       .duration_since(SystemTime::UNIX_EPOCH)
       .unwrap()
       .as_millis() as u64;
 
-    let tasks: Vec<String> = self
-      .connection()
-      .zrangebyscore_limit("delayed", 0, max, 0, limit as isize)
-      .await?;
-
-    if tasks.is_empty() {
-      return Ok(Vec::new());
-    }
-
-    let mut p = redis::pipe();
-    let pipe = p.atomic();
-    for t in tasks {
-      let a: Vec<&str> = t.split(":").collect();
-      pipe
-        .cmd("XRANGE")
-        .arg("myqueue_delayed")
-        .arg(a[0])
-        .arg(a[0]);
-      pipe.cmd("XDEL").arg("myqueue_delayed").arg(a[0]).ignore();
-      pipe.cmd("ZREM").arg("delayed").arg(&t).ignore();
-    }
-    let replies: Vec<StreamRangeReply> = pipe.query_async(self.connection()).await?;
-
-    let mut p = redis::pipe();
-    let pipe = p.atomic();
-    for mut r in replies {
-      let task = r.ids.pop().unwrap();
-      let kind: String = task.get("kind").unwrap();
-      let data: String = task.get("data").unwrap();
-      let queue: String = task.get("queue").unwrap();
-      pipe
-        .cmd("XADD")
-        .arg("myqueue_pending")
-        .arg("*")
-        .arg("kind")
-        .arg(kind)
-        .arg("data")
-        .arg(data)
-        .arg("queue")
-        .arg(queue);
-    }
-
-    pipe.query_async(self.connection()).await
+    self
+      .script()
+      .prepare_for(ScriptStore::SCHEDULE_DELAY)
+      .key("delayed")
+      .arg(max)
+      .arg(limit)
+      .invoke_async(self.connection())
+      .await
   }
 }
 
@@ -371,27 +336,55 @@ fn generate_key(queue: &str, suffix: &str) -> String {
   format!("{}_{}", queue, suffix)
 }
 
+use redis::{Script, ScriptInvocation};
 use std::collections::HashMap;
 use std::sync::Once;
 
-const PENDING_SCRIPT: &str = r"
-  local pending = redis.call('xpending', KEYS[1], ARGV[1], '-', '+', '1', ARGV[2])
-  if table.maxn(pending) == 1 then
-    local id = pending[1][1]
-    return redis.call('xrange', KEYS[1], id, id)
-  else
-    return pending
-  end
-";
+const SCHEDULED_DELAYED_SCRIPT: &str = r"
+  -- KEYS[1]: Sorted set key
+  -- ARGV[1]: Max score
+  -- ARGV[2]: Number of members to schedule
 
-const PENDING_NAME: &str = "PENDING_SCRIPT";
+  local tasks = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
+
+  if table.maxn(tasks) < 1
+  then
+    -- If no delayed tasks are planned, do nothing
+    return nil
+  end
+
+  local res = {}
+  for i,value in ipairs(tasks) do
+    -- For upcoming tasks, we find its queue and id by splitting the member
+    -- of the sorted set
+    local ix = string.find(value, ':')
+    local id = string.sub(value,0, ix - 1)
+    local queue = string.sub(value, ix + 1)
+
+    -- Append suffixes to the queue
+    local delayed = queue..'_delayed'
+    local pending = queue..'_pending'
+    
+    -- Read task data
+    local data = redis.call('XRANGE', delayed, id, id)[1][2]
+    -- Create task with given data in stream
+    table.insert(res, redis.call('XADD', pending, '*', unpack(data)))
+    -- Remove values from delayed queues
+    redis.call('XDEL', delayed, id)
+    redis.call('ZREM', KEYS[1], value)
+  end
+
+  return res
+";
 
 pub struct ScriptStore {
   scripts: Option<HashMap<&'static str, Script>>,
 }
 
 impl ScriptStore {
-  fn new() -> &'static Self {
+  pub const SCHEDULE_DELAY: &'static str = "SCHEDULE_DELAY";
+
+  pub fn new() -> &'static Self {
     static START: Once = Once::new();
     static mut SCRIPT: ScriptStore = ScriptStore { scripts: None };
 
@@ -400,7 +393,7 @@ impl ScriptStore {
       START.call_once(|| {
         tracing::debug!("Loading store scripts");
         let mut scripts = HashMap::new();
-        scripts.insert(PENDING_NAME, Script::new(PENDING_SCRIPT));
+        scripts.insert(Self::SCHEDULE_DELAY, Script::new(SCHEDULED_DELAYED_SCRIPT));
         SCRIPT.scripts = Some(scripts);
       });
 
@@ -408,7 +401,13 @@ impl ScriptStore {
     }
   }
 
-  fn _pending_task(&'static self) -> &'static Script {
-    self.scripts.as_ref().unwrap().get(PENDING_NAME).unwrap()
+  pub fn prepare_for(&'static self, script: &str) -> ScriptInvocation {
+    self
+      .scripts
+      .as_ref()
+      .unwrap()
+      .get(script)
+      .unwrap()
+      .prepare_invoke()
   }
 }

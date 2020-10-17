@@ -1,7 +1,7 @@
 use super::store::{MultiplexedStore, RedisStorage};
 use std::time::Duration;
-use xactor::{Addr, Actor, Context, Error as ActorError, message, Handler};
 use tracing::{debug, info};
+use xactor::{message, Actor, Addr, Context, Error as ActorError, Handler};
 
 pub struct Scheduler {
   _worker: Addr<SchedulerWorker>,
@@ -9,11 +9,11 @@ pub struct Scheduler {
 
 impl Scheduler {
   pub async fn init(store: MultiplexedStore) -> Self {
-
-    let _worker = SchedulerWorker::new(store).start().await.expect("failed_scheduler");
-    Self {
-      _worker,
-    }
+    let _worker = SchedulerWorker::new(store)
+      .start()
+      .await
+      .expect("failed_scheduler");
+    Self { _worker }
   }
 }
 
@@ -23,13 +23,11 @@ struct SchedulerWorker {
 
 impl SchedulerWorker {
   fn new(store: MultiplexedStore) -> Self {
-    Self {
-      store,
-    }
+    Self { store }
   }
 
   async fn poll_tasks(&mut self) {
-    if let Err(e) = self.store.schedule(5).await {
+    if let Err(e) = self.store.schedule_delayed(5).await {
       info!("Failed to schedule tasks {}", e);
     }
   }
