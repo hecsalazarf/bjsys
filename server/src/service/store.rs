@@ -340,11 +340,56 @@ use redis::{Script, ScriptInvocation};
 use std::collections::HashMap;
 use std::sync::Once;
 
-const SCHEDULED_DELAYED_SCRIPT: &str = r"
-  -- KEYS[1]: Sorted set key
-  -- ARGV[1]: Max score
-  -- ARGV[2]: Number of members to schedule
+pub struct ScriptStore {
+  scripts: Option<HashMap<&'static str, Script>>,
+}
 
+impl ScriptStore {
+  pub const SCHEDULE_DELAY: &'static str = "SCHEDULE_DELAY";
+
+  pub fn new() -> &'static Self {
+    static START: Once = Once::new();
+    static mut SCRIPT: ScriptStore = ScriptStore { scripts: None };
+
+    // Safe because we only write once in a synchronized fashion
+    unsafe {
+      START.call_once(|| {
+        tracing::debug!("Loading store scripts");
+        let mut scripts = HashMap::new();
+        let mut iter = SCRIPTS.iter();
+        while let Some(key) = iter.next() {
+          let code = *iter.next().unwrap();
+          scripts.insert(*key, Script::new(code));
+        }
+
+        SCRIPT.scripts = Some(scripts);
+      });
+
+      &SCRIPT
+    }
+  }
+
+  pub fn prepare_for(&'static self, script: &str) -> ScriptInvocation {
+    self
+      .scripts
+      .as_ref()
+      .unwrap()
+      .get(script)
+      .unwrap()
+      .prepare_invoke()
+  }
+}
+
+
+const SCRIPTS: [&str; 2] = [
+  // ----------------------------
+  //       SCHEDULE_DELAY 
+  // ----------------------------
+  // -- KEYS[1]: Sorted set key
+  // -- ARGV[1]: Max score
+  // -- ARGV[2]: Number of members to schedule
+  ScriptStore::SCHEDULE_DELAY,
+  r"
   local tasks = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
 
   if table.maxn(tasks) < 1
@@ -375,39 +420,5 @@ const SCHEDULED_DELAYED_SCRIPT: &str = r"
   end
 
   return res
-";
-
-pub struct ScriptStore {
-  scripts: Option<HashMap<&'static str, Script>>,
-}
-
-impl ScriptStore {
-  pub const SCHEDULE_DELAY: &'static str = "SCHEDULE_DELAY";
-
-  pub fn new() -> &'static Self {
-    static START: Once = Once::new();
-    static mut SCRIPT: ScriptStore = ScriptStore { scripts: None };
-
-    // Safe because we only write once in a synchronized fashion
-    unsafe {
-      START.call_once(|| {
-        tracing::debug!("Loading store scripts");
-        let mut scripts = HashMap::new();
-        scripts.insert(Self::SCHEDULE_DELAY, Script::new(SCHEDULED_DELAYED_SCRIPT));
-        SCRIPT.scripts = Some(scripts);
-      });
-
-      &SCRIPT
-    }
-  }
-
-  pub fn prepare_for(&'static self, script: &str) -> ScriptInvocation {
-    self
-      .scripts
-      .as_ref()
-      .unwrap()
-      .get(script)
-      .unwrap()
-      .prepare_invoke()
-  }
-}
+"
+];
