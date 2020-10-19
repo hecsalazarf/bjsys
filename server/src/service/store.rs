@@ -21,6 +21,7 @@ impl StreamDefs {
   const DEFAULT_GROUP: &'static str = "default_group";
   const DEFAULT_CONSUMER: &'static str = "default_consumer";
   const NEW_ID: &'static str = ">";
+  const AUTO_ID: &'static str = "*";
 }
 
 #[tonic::async_trait]
@@ -109,7 +110,7 @@ pub trait RedisStorage: Sized + Sync {
       .connection()
       .xadd(
         key,
-        "*",
+        StreamDefs::AUTO_ID,
         &[
           ("kind", &task.kind),
           ("data", &task.data),
@@ -125,7 +126,7 @@ pub trait RedisStorage: Sized + Sync {
       .connection()
       .xadd(
         &key,
-        "*",
+        StreamDefs::AUTO_ID,
         &[
           ("kind", &task.kind),
           ("data", &task.data),
