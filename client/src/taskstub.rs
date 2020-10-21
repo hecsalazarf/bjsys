@@ -3,6 +3,8 @@
 pub struct CreateRequest {
   #[prost(message, optional, tag = "1")]
   pub task: ::std::option::Option<Task>,
+  #[prost(uint64, tag = "2")]
+  pub delay: u64,
 }
 /// Create Response
 #[derive(Clone, PartialEq, ::prost::Message)]
