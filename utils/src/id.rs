@@ -41,10 +41,11 @@ impl IncrId {
   pub fn encode<'a>(&self, buffer: &'a mut [u8]) -> &'a str {
     use std::io::Write;
     write!(&mut buffer[..], "{}-{}", self.0, self.1).unwrap();
-    unsafe {
+    let encoded = unsafe {
       // Safe because we encode only valid UTF-8: {u64}-{u64}
       std::str::from_utf8_unchecked(buffer)
-    }
+    };
+    encoded.trim_matches(char::from(0))
   }
 }
 
