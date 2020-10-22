@@ -3,7 +3,7 @@ use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
 use super::stub::tasks::Task;
 use super::ServiceCmd;
 use core::task::Poll;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -275,21 +275,21 @@ impl Handler<ServiceCmd> for QueueDispatcher {
 struct QueueReader {
   key: String,
   store: Store,
-  queue: VecDeque<Task>,
-  pending: bool,
+  // queue: VecDeque<Task>,
+  // pending: bool,
 }
 
 impl QueueReader {
   pub async fn connect(queue: &str) -> Result<Self, StoreError> {
-    let key = format!("{}_{}", queue, "pending");
-    let queue = VecDeque::with_capacity(5);
-    let pending = true;
-    let store = Self::init_store(&key).await?;
+    let key = String::from(queue);
+    // let queue = VecDeque::with_capacity(5);
+    // let pending = true;
+    let store = Store::connect().await?;
 
     Ok(Self {
       key,
-      queue,
-      pending,
+      // queue,
+      // pending,
       store,
     })
   }
@@ -299,38 +299,9 @@ impl QueueReader {
   }
 
   pub async fn read(&mut self) -> Result<Option<Task>, StoreError> {
-    if self.queue.is_empty() {
-      let mut tasks = self.read_from_store().await?;
-      self.queue.append(&mut tasks);
-    }
-    Ok(self.queue.pop_front())
-  }
-
-  async fn read_from_store(&mut self) -> Result<VecDeque<Task>, StoreError> {
-    if self.pending {
-      let tasks = self.store.read_pending(&self.key, 5).await?;
-      if tasks.len() < 5 {
-        self.pending = false;
-      }
-      Ok(tasks)
-    } else {
-      self.store.read_new(&self.key, 5).await
-    }
-  }
-
-  async fn init_store(key: &str) -> Result<Store, StoreError> {
-    let mut store = Store::connect().await?;
-    if let Err(e) = store.create_queue(key).await {
-      if let Some(c) = e.code() {
-        if c == "BUSYGROUP" {
-          debug!("Queue {} was not created, exists already", key);
-        }
-      } else {
-        return Err(e);
-      }
-    }
-
-    Ok(store)
+    // TODO: How to handle pending tasks?
+    let task = self.store.read_new(&self.key, 5).await?;
+    Ok(Some(task))
   }
 }
 
@@ -422,7 +393,6 @@ impl DispatchWorker {
             // break the loop.
             break;
           }
-  
           match res.unwrap() {
             Err(e) => {
               error!("Cannot read task {}", e);

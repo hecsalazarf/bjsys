@@ -1,27 +1,21 @@
 use super::stub::tasks::Task;
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  streams::{StreamId, StreamReadOptions, StreamReadReply},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
 };
+use std::time::{Duration, SystemTime};
 use tokio::{stream::StreamExt, sync::mpsc};
+use utils::id::{generate_id, IdGenerator};
 
 pub use redis::RedisError as StoreError;
 
-struct KeySuffix;
+struct QueueSuffix;
 
-impl KeySuffix {
+impl QueueSuffix {
   const PENDING: &'static str = "pending";
   const DELAYED: &'static str = "delayed";
-}
-
-struct StreamDefs;
-
-impl StreamDefs {
-  const DEFAULT_GROUP: &'static str = "default_group";
-  const DEFAULT_CONSUMER: &'static str = "default_consumer";
-  const NEW_ID: &'static str = ">";
-  const AUTO_ID: &'static str = "*";
+  const DONE: &'static str = "done";
+  const WAITING: &'static str = "waiting";
 }
 
 #[tonic::async_trait]
@@ -94,9 +88,6 @@ impl Clone for Connection<MultiplexedConnection> {
   }
 }
 
-use std::collections::VecDeque;
-use std::time::{Duration, SystemTime};
-
 #[tonic::async_trait]
 pub trait RedisStorage: Sized + Sync {
   type Connection: InnerConnection + Send;
@@ -105,41 +96,39 @@ pub trait RedisStorage: Sized + Sync {
   fn script(&self) -> &'static ScriptStore;
 
   async fn create_task(&mut self, task: Task) -> Result<String, StoreError> {
-    let key = generate_key(&task.queue, KeySuffix::PENDING);
-    self
-      .connection()
-      .xadd(
-        key,
-        StreamDefs::AUTO_ID,
+    let waiting = generate_key(&task.queue, QueueSuffix::WAITING);
+    let mut buffer = IdGenerator::encode_buffer();
+    let id = generate_id().encode(&mut buffer);
+    let mut pipeline = redis::pipe();
+    let pipeline = pipeline.atomic();
+    pipeline
+      .hset_multiple(
+        id,
         &[
           ("kind", &task.kind),
           ("data", &task.data),
           ("queue", &task.queue),
         ],
       )
-      .await
+      .ignore()
+      .lpush(&waiting, id)
+      .ignore()
+      .query_async(self.connection())
+      .await?;
+    Ok(String::from(id))
   }
 
   async fn create_delayed_task(&mut self, task: Task, delay: u64) -> Result<String, StoreError> {
-    let key = generate_key(&task.queue, KeySuffix::DELAYED);
-    let mut member: String = self
-      .connection()
-      .xadd(
-        &key,
-        StreamDefs::AUTO_ID,
-        &[
-          ("kind", &task.kind),
-          ("data", &task.data),
-          ("queue", &task.queue),
-        ],
-      )
-      .await?;
+    let mut pipeline = redis::pipe();
+    let pipeline = pipeline.atomic();
 
-    let id = member.clone();
+    let mut buffer = IdGenerator::encode_buffer();
+    let id = generate_id().encode(&mut buffer);
+    let mut member = String::from(id);
     member.push_str(":");
     member.push_str(&task.queue);
-    let delay = Duration::from_millis(delay);
 
+    let delay = Duration::from_millis(delay);
     let now = SystemTime::now()
       .duration_since(SystemTime::UNIX_EPOCH)
       .unwrap();
@@ -150,71 +139,56 @@ pub trait RedisStorage: Sized + Sync {
       u64::MAX
     };
 
-    self.connection().zadd("delayed", &member, score).await?;
-
-    Ok(id)
-  }
-
-  async fn create_queue(&mut self, key: &str) -> Result<(), StoreError> {
-    self
-      .connection()
-      .xgroup_create_mkstream(key, StreamDefs::DEFAULT_GROUP, 0)
-      .await
-  }
-
-  async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
-    let opts = StreamReadOptions::default()
-      .count(count)
-      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
-
-    self.read_stream(key, "0", opts).await
-  }
-
-  async fn read_new(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
-    let opts = StreamReadOptions::default()
-      .block(0)
-      .count(count)
-      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
-
-    self.read_stream(key, StreamDefs::NEW_ID, opts).await
-  }
-
-  async fn read_stream(
-    &mut self,
-    key: &str,
-    id: &str,
-    opts: StreamReadOptions,
-  ) -> Result<VecDeque<Task>, StoreError> {
-    let mut reply: StreamReadReply = self.connection().xread_options(&[key], &[id], opts).await?;
-
-    // Unwrap never panics as the key exists, otherwise Err is returned on redis xread
-    let ids = reply.keys.pop().unwrap().ids;
-    let tasks = ids.into_iter().map(|r| r.into()).collect();
-    Ok(tasks)
-  }
-
-  async fn collect(&mut self, key: &str) -> Result<Task, StoreError> {
-    let opts = StreamReadOptions::default()
-      .block(0)
-      .count(1)
-      .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
-
-    let mut reply: StreamReadReply = self
-      .connection()
-      .xread_options(&[key], &[StreamDefs::NEW_ID], opts)
+    pipeline
+      .hset_multiple(
+        id,
+        &[
+          ("kind", &task.kind),
+          ("data", &task.data),
+          ("queue", &task.queue),
+        ],
+      )
+      .ignore()
+      .zadd(QueueSuffix::DELAYED, &member, score)
+      .ignore()
+      .query_async(self.connection())
       .await?;
-    // This never panicks as we block until getting a reply, and it
-    // always has one single value
-    let t = reply.keys.pop().unwrap().ids.pop().unwrap();
-    Ok(t.into())
+    Ok(String::from(id))
+  }
+
+  // async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
+  //   let opts = StreamReadOptions::default()
+  //     .count(count)
+  //     .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
+
+  //   self.read_stream(key, "0", opts).await
+  // }
+
+  async fn read_new(&mut self, queue: &str, _count: usize) -> Result<Task, StoreError> {
+    let waiting = generate_key(queue, QueueSuffix::WAITING);
+    let pending = generate_key(queue, QueueSuffix::PENDING);
+
+    let id: String = self.connection().brpoplpush(&waiting, &pending, 0).await?;
+    let values: HashMap<String, String> = self.connection().hgetall(&id).await?;
+
+    Ok(Task::from_map(id, values))
   }
 
   async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
-    let key = generate_key(&queue, KeySuffix::PENDING);
-    self
-      .connection()
-      .xack(key, StreamDefs::DEFAULT_GROUP, &[task_id])
-      .await
+    let mut pipeline = redis::pipe();
+    let pipeline = pipeline.atomic();
+
+    let pending = generate_key(queue, QueueSuffix::PENDING);
+    let done = generate_key(queue, QueueSuffix::DONE);
+    pipeline
+      // Remove from tail to head as older tasks are at the end
+      .lrem(&pending, -1, task_id)
+      .ignore()
+      .lpush(&done, task_id)
+      .ignore()
+      .query_async(self.connection())
+      .await?;
+    Ok(1)
   }
 
   async fn schedule_delayed(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
@@ -317,12 +291,11 @@ impl RedisStorage for MultiplexedStore {
   }
 }
 
-impl From<StreamId> for Task {
-  fn from(s: StreamId) -> Self {
-    let kind = s.get("kind").unwrap_or_default();
-    let data = s.get("data").unwrap_or_default();
-    let queue = s.get("queue").unwrap_or_default();
-    let id = s.id;
+impl Task {
+  fn from_map(id: String, mut values: HashMap<String, String>) -> Self {
+    let kind = values.remove("kind").unwrap_or_default();
+    let data = values.remove("data").unwrap_or_default();
+    let queue = values.remove("queue").unwrap_or_default();
 
     Task {
       id,
@@ -381,10 +354,9 @@ impl ScriptStore {
   }
 }
 
-
 const SCRIPTS: [&str; 2] = [
   // ----------------------------
-  //       SCHEDULE_DELAY 
+  //       SCHEDULE_DELAY
   // ----------------------------
   // -- KEYS[1]: Sorted set key
   // -- ARGV[1]: Max score
@@ -408,18 +380,16 @@ const SCRIPTS: [&str; 2] = [
     local queue = string.sub(value, ix + 1)
 
     -- Append suffixes to the queue
-    local delayed = queue..'_delayed'
-    local pending = queue..'_pending'
+    local waiting = queue..'_waiting'
     
-    -- Read task data
-    local data = redis.call('XRANGE', delayed, id, id)[1][2]
-    -- Create task with given data in stream
-    table.insert(res, redis.call('XADD', pending, '*', unpack(data)))
-    -- Remove values from delayed queues
-    redis.call('XDEL', delayed, id)
-    redis.call('ZREM', KEYS[1], value)
+    -- Push task to the waiting queue
+    redis.call('LPUSH', waiting, id)
+    table.insert(res, id)
   end
 
+  -- Remove values from delayed queue
+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
+
   return res
-"
+",
 ];
