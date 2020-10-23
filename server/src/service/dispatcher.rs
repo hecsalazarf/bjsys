@@ -1,6 +1,6 @@
 use super::ack::{AckManager, WaitingTask};
 use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
-use super::stub::tasks::Task;
+use super::stub::tasks::FetchResponse;
 use super::ServiceCmd;
 use core::task::Poll;
 use std::collections::HashMap;
@@ -275,7 +275,7 @@ impl Handler<ServiceCmd> for QueueDispatcher {
 struct QueueReader {
   key: String,
   store: Store,
-  // queue: VecDeque<Task>,
+  // queue: VecDeque<FetchResponse>,
   // pending: bool,
 }
 
@@ -298,7 +298,7 @@ impl QueueReader {
     self.store.id()
   }
 
-  pub async fn read(&mut self) -> Result<Option<Task>, StoreError> {
+  pub async fn read(&mut self) -> Result<Option<FetchResponse>, StoreError> {
     // TODO: How to handle pending tasks?
     let task = self.store.read_new(&self.key).await?;
     Ok(Some(task))
@@ -317,7 +317,7 @@ impl Actor for QueueReader {
   }
 }
 
-#[message(result = "Result<Option<Task>, StoreError>")]
+#[message(result = "Result<Option<FetchResponse>, StoreError>")]
 struct ReadTask;
 
 #[tonic::async_trait]
@@ -326,7 +326,7 @@ impl Handler<ReadTask> for QueueReader {
     &mut self,
     _: &mut ActorContext<Self>,
     _: ReadTask,
-  ) -> Result<Option<Task>, StoreError> {
+  ) -> Result<Option<FetchResponse>, StoreError> {
     self.read().await
   }
 }
@@ -338,8 +338,8 @@ enum WorkerCmd {
 
 struct DispatchWorker {
   ack: AckManager,
-  tx: mpsc::Sender<Result<Task, Status>>,
-  rx: Option<mpsc::Receiver<Result<Task, Status>>>,
+  tx: mpsc::Sender<Result<FetchResponse, Status>>,
+  rx: Option<mpsc::Receiver<Result<FetchResponse, Status>>>,
   master: Addr<QueueDispatcher>,
   reader: Addr<QueueReader>,
   exit: Arc<Notify>,
@@ -347,7 +347,7 @@ struct DispatchWorker {
 }
 
 impl DispatchWorker {
-  pub fn receiver(&mut self) -> mpsc::Receiver<Result<Task, Status>> {
+  pub fn receiver(&mut self) -> mpsc::Receiver<Result<FetchResponse, Status>> {
     self.rx.take().unwrap()
   }
 
@@ -359,7 +359,7 @@ impl DispatchWorker {
     self.exit.clone()
   }
 
-  async fn send(&mut self, task: Task, id: u64) {
+  async fn send(&mut self, task: FetchResponse, id: u64) {
     let notify = self.ack.in_process(task.id.clone());
 
     // Call to master may fail when its address has been dropped,
@@ -466,14 +466,14 @@ impl Handler<WorkerCmd> for DispatchWorker {
 }
 
 pub struct TaskStream {
-  stream: mpsc::Receiver<Result<Task, Status>>,
+  stream: mpsc::Receiver<Result<FetchResponse, Status>>,
   dispatcher: Addr<QueueDispatcher>,
   id: u64,
 }
 
 impl TaskStream {
   fn new(
-    stream: mpsc::Receiver<Result<Task, Status>>,
+    stream: mpsc::Receiver<Result<FetchResponse, Status>>,
     dispatcher: Addr<QueueDispatcher>,
     id: u64,
   ) -> Self {
@@ -486,7 +486,7 @@ impl TaskStream {
 }
 
 impl Stream for TaskStream {
-  type Item = Result<Task, Status>;
+  type Item = Result<FetchResponse, Status>;
   fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
     self.stream.poll_recv(cx)
   }

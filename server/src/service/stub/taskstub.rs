@@ -1,9 +1,13 @@
 /// Create Request
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateRequest {
-  #[prost(message, optional, tag = "1")]
-  pub task: ::std::option::Option<Task>,
-  #[prost(uint64, tag = "2")]
+  #[prost(string, tag = "1")]
+  pub queue: std::string::String,
+  #[prost(string, tag = "2")]
+  pub data: std::string::String,
+  #[prost(uint32, tag = "3")]
+  pub retry: u32,
+  #[prost(uint64, tag = "4")]
   pub delay: u64,
 }
 /// Create Response
@@ -24,9 +28,9 @@ pub struct AcknowledgeRequest {
   #[prost(string, tag = "4")]
   pub message: std::string::String,
 }
-/// Consumer details
+/// Fetch Request
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Consumer {
+pub struct FetchRequest {
   #[prost(string, tag = "1")]
   pub hostname: std::string::String,
   #[prost(string, tag = "2")]
@@ -38,16 +42,14 @@ pub struct Consumer {
   #[prost(uint32, tag = "5")]
   pub workers: u32,
 }
-/// Task
+/// FetchResponse
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Task {
+pub struct FetchResponse {
   #[prost(string, tag = "1")]
   pub id: std::string::String,
   #[prost(string, tag = "2")]
-  pub kind: std::string::String,
-  #[prost(string, tag = "3")]
   pub queue: std::string::String,
-  #[prost(string, tag = "4")]
+  #[prost(string, tag = "3")]
   pub data: std::string::String,
 }
 /// Empty response
@@ -79,11 +81,14 @@ pub mod tasks_core_server {
       request: tonic::Request<super::AcknowledgeRequest>,
     ) -> Result<tonic::Response<super::Empty>, tonic::Status>;
     #[doc = "Server streaming response type for the Fetch method."]
-    type FetchStream: Stream<Item = Result<super::Task, tonic::Status>> + Send + Sync + 'static;
-    #[doc = " Consumer that connects to process tasks (consumer)"]
+    type FetchStream: Stream<Item = Result<super::FetchResponse, tonic::Status>>
+      + Send
+      + Sync
+      + 'static;
+    #[doc = " Fetch to process tasks (consumer)"]
     async fn fetch(
       &self,
-      request: tonic::Request<super::Consumer>,
+      request: tonic::Request<super::FetchRequest>,
     ) -> Result<tonic::Response<Self::FetchStream>, tonic::Status>;
   }
   #[derive(Debug)]
@@ -177,11 +182,11 @@ pub mod tasks_core_server {
         "/taskstub.TasksCore/Fetch" => {
           #[allow(non_camel_case_types)]
           struct FetchSvc<T: TasksCore>(pub Arc<T>);
-          impl<T: TasksCore> tonic::server::ServerStreamingService<super::Consumer> for FetchSvc<T> {
-            type Response = super::Task;
+          impl<T: TasksCore> tonic::server::ServerStreamingService<super::FetchRequest> for FetchSvc<T> {
+            type Response = super::FetchResponse;
             type ResponseStream = T::FetchStream;
             type Future = BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
-            fn call(&mut self, request: tonic::Request<super::Consumer>) -> Self::Future {
+            fn call(&mut self, request: tonic::Request<super::FetchRequest>) -> Self::Future {
               let inner = self.0.clone();
               let fut = async move { (*inner).fetch(request).await };
               Box::pin(fut)

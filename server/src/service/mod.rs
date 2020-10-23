@@ -1,18 +1,18 @@
 mod ack;
 mod dispatcher;
-mod store;
 mod scheduler;
+mod store;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AcknowledgeRequest, Consumer, CreateRequest, CreateResponse, Empty};
+use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{MasterDispatcher, TaskStream};
-use store::{MultiplexedStore, RedisStorage};
 use scheduler::Scheduler;
+use store::{MultiplexedStore, RedisStorage};
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
@@ -54,16 +54,13 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 impl TasksCore for TasksService {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     let request = request.into_inner();
-    if request.task.is_none() {
-      return Err(Status::invalid_argument("No task defined"));
-    }
-    let task = request.task.unwrap();
+    // TODO: Validate request data;
 
     let mut store = self.store.clone();
     let res = if request.delay > 0 {
-      store.create_delayed_task(task, request.delay).await
+      store.create_delayed_task(&request, request.delay).await
     } else {
-      store.create_task(task).await
+      store.create_task(&request).await
     };
 
     res
@@ -86,7 +83,7 @@ impl TasksCore for TasksService {
   }
 
   type FetchStream = TaskStream;
-  async fn fetch(&self, request: Request<Consumer>) -> ServiceResult<Self::FetchStream> {
+  async fn fetch(&self, request: Request<FetchRequest>) -> ServiceResult<Self::FetchStream> {
     let request = request.into_inner();
     let queue = request.queue;
     let dispatcher = self.dispatcher.create(queue).await?;

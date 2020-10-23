@@ -1,4 +1,4 @@
-use super::stub::tasks::{AcknowledgeRequest, Task};
+use super::stub::tasks::{AcknowledgeRequest, CreateRequest, FetchResponse};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
@@ -95,21 +95,14 @@ pub trait RedisStorage: Sized + Sync {
   fn connection(&mut self) -> &mut Self::Connection;
   fn script(&self) -> &'static ScriptStore;
 
-  async fn create_task(&mut self, task: Task) -> Result<String, StoreError> {
-    let waiting = generate_key(&task.queue, QueueSuffix::WAITING);
+  async fn create_task(&mut self, req: &CreateRequest) -> Result<String, StoreError> {
+    let waiting = generate_key(&req.queue, QueueSuffix::WAITING);
     let mut buffer = IdGenerator::encode_buffer();
     let id = generate_id().encode(&mut buffer);
     let mut pipe = redis::pipe();
     pipe
       .atomic()
-      .hset_multiple(
-        id,
-        &[
-          ("kind", &task.kind),
-          ("data", &task.data),
-          ("queue", &task.queue),
-        ],
-      )
+      .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
       .ignore()
       .lpush(&waiting, id)
       .ignore()
@@ -118,24 +111,21 @@ pub trait RedisStorage: Sized + Sync {
     Ok(String::from(id))
   }
 
-  async fn create_delayed_task(&mut self, task: Task, delay: u64) -> Result<String, StoreError> {
+  async fn create_delayed_task(
+    &mut self,
+    req: &CreateRequest,
+    delay: u64,
+  ) -> Result<String, StoreError> {
     let mut pipe = redis::pipe();
 
     let mut buffer = IdGenerator::encode_buffer();
     let id = generate_id().encode(&mut buffer);
-    let member = member_from_id(id, &task.queue);
+    let member = member_from_id(id, &req.queue);
     let score = time_to_delay(delay);
 
     pipe
       .atomic()
-      .hset_multiple(
-        id,
-        &[
-          ("kind", &task.kind),
-          ("data", &task.data),
-          ("queue", &task.queue),
-        ],
-      )
+      .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
       .ignore()
       .zadd(QueueSuffix::DELAYED, &member, score)
       .ignore()
@@ -144,7 +134,7 @@ pub trait RedisStorage: Sized + Sync {
     Ok(String::from(id))
   }
 
-  // async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<Task>, StoreError> {
+  // async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<FetchResponse>, StoreError> {
   //   let opts = StreamReadOptions::default()
   //     .count(count)
   //     .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
@@ -152,7 +142,7 @@ pub trait RedisStorage: Sized + Sync {
   //   self.read_stream(key, "0", opts).await
   // }
 
-  async fn read_new(&mut self, queue: &str) -> Result<Task, StoreError> {
+  async fn read_new(&mut self, queue: &str) -> Result<FetchResponse, StoreError> {
     let waiting = generate_key(queue, QueueSuffix::WAITING);
     let pending = generate_key(queue, QueueSuffix::PENDING);
 
@@ -173,7 +163,7 @@ pub trait RedisStorage: Sized + Sync {
     // Never fails, as a successful response always contains data
     let values = values.pop().unwrap();
 
-    Ok(Task::from_map(id, values))
+    Ok(FetchResponse::from_map(id, values))
   }
 
   async fn finish(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
@@ -324,18 +314,12 @@ impl RedisStorage for MultiplexedStore {
   }
 }
 
-impl Task {
+impl FetchResponse {
   fn from_map(id: String, mut values: HashMap<String, String>) -> Self {
-    let kind = values.remove("kind").unwrap_or_default();
     let data = values.remove("data").unwrap_or_default();
     let queue = values.remove("queue").unwrap_or_default();
 
-    Task {
-      id,
-      kind,
-      queue,
-      data,
-    }
+    FetchResponse { id, queue, data }
   }
 }
 

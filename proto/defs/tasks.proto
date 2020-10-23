@@ -9,14 +9,16 @@ service TasksCore {
   // Acknowledge that a task was processed (consumer)
   rpc Acknowledge(AcknowledgeRequest) returns (Empty) {}
 
-  // Consumer that connects to process tasks (consumer)
-  rpc Fetch(Consumer) returns (stream Task) {}
+  // Fetch to process tasks (consumer)
+  rpc Fetch(FetchRequest) returns (stream FetchResponse) {}
 }
 
 // Create Request
 message CreateRequest {
-  Task task = 1;
-  uint64 delay = 2;
+  string queue = 1;
+  string data = 2;
+  uint32 retry = 3;
+  uint64 delay = 4;
 }
 
 // Create Response
@@ -32,8 +34,8 @@ message AcknowledgeRequest {
   string message = 4;
 }
 
-// Consumer details
-message Consumer {
+// Fetch Request
+message FetchRequest {
   string hostname = 1;
   string kind = 2;
   string queue = 3;
@@ -41,12 +43,11 @@ message Consumer {
   uint32 workers = 5;
 }
 
-// Task
-message Task {
+// FetchResponse
+message FetchResponse {
   string id = 1;
-  string kind = 2;
-  string queue = 3;
-  string data = 4;
+  string queue = 2;
+  string data = 3;
 }
 
 // Task status
