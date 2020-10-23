@@ -300,7 +300,7 @@ impl QueueReader {
 
   pub async fn read(&mut self) -> Result<Option<Task>, StoreError> {
     // TODO: How to handle pending tasks?
-    let task = self.store.read_new(&self.key, 5).await?;
+    let task = self.store.read_new(&self.key).await?;
     Ok(Some(task))
   }
 }

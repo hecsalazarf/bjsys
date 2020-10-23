@@ -28,7 +28,8 @@ message CreateResponse {
 message AcknowledgeRequest {
   string task_id = 1;
   string queue = 2;
-  TaskStatus status = 3; 
+  TaskStatus status = 3;
+  string message = 4;
 }
 
 // Consumer details
@@ -51,8 +52,8 @@ message Task {
 // Task status
 enum TaskStatus {
   DONE = 0;
-  CANCELED = 1;
-  FAILED = 2;
+  FAILED = 1;
+  CANCELED = 2;
 }
 
 // Empty response

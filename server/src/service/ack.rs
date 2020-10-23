@@ -64,29 +64,25 @@ impl AckWorker {
 
   async fn report(&mut self, request: AcknowledgeRequest) -> Result<(), Status> {
     let status = TaskStatus::from_i32(request.status).unwrap(); // TODO: Handle None
-    let task_id = request.task_id;
-    let queue = request.queue;
-  
+ 
     let res = match status {
-      TaskStatus::Done => self.store.ack(&task_id, &queue).await,
-      TaskStatus::Failed => self.store.fail(&task_id, &queue).await,
-      TaskStatus::Canceled => {
-        unimplemented!();
-      }
+      TaskStatus::Done => self.store.finish(&request).await,
+      TaskStatus::Failed => self.store.fail(&request).await,
+      TaskStatus::Canceled => self.store.finish(&request).await,
     };
 
     match res {
       Ok(r) => {
         if r > 0 {
-          info!("Task {} reported with status {}", task_id, request.status);
-          if let Some(n) = self.tasks.remove(&Arc::new(task_id)) {
+          info!("Task {} reported with status {}", request.task_id, request.status);
+          if let Some(n) = self.tasks.remove(&Arc::new(request.task_id)) {
             n.notify();
           }
         }
         Ok(())
       }
       Err(e) => {
-        error!("Cannot report task {}: {}", task_id, e);
+        error!("Cannot report task {}: {}", request.task_id, e);
         Err(Status::unavailable("Service not available"))
       }
     }

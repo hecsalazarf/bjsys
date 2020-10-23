@@ -21,6 +21,8 @@ pub struct AcknowledgeRequest {
   pub queue: std::string::String,
   #[prost(enumeration = "TaskStatus", tag = "3")]
   pub status: i32,
+  #[prost(string, tag = "4")]
+  pub message: std::string::String,
 }
 /// Consumer details
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -56,8 +58,8 @@ pub struct Empty {}
 #[repr(i32)]
 pub enum TaskStatus {
   Done = 0,
-  Canceled = 1,
-  Failed = 2,
+  Failed = 1,
+  Canceled = 2,
 }
 #[doc = r" Generated server implementations."]
 pub mod tasks_core_server {

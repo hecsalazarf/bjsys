@@ -1,4 +1,4 @@
-use super::stub::tasks::Task;
+use super::stub::tasks::{AcknowledgeRequest, Task};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
@@ -152,7 +152,7 @@ pub trait RedisStorage: Sized + Sync {
   //   self.read_stream(key, "0", opts).await
   // }
 
-  async fn read_new(&mut self, queue: &str, _count: usize) -> Result<Task, StoreError> {
+  async fn read_new(&mut self, queue: &str) -> Result<Task, StoreError> {
     let waiting = generate_key(queue, QueueSuffix::WAITING);
     let pending = generate_key(queue, QueueSuffix::PENDING);
 
@@ -173,44 +173,50 @@ pub trait RedisStorage: Sized + Sync {
     Ok(Task::from_map(id, values))
   }
 
-  async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
+  async fn finish(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
     let mut pipe = redis::pipe();
 
-    let pending = generate_key(queue, QueueSuffix::PENDING);
-    let done = generate_key(queue, QueueSuffix::DONE);
+    let pending = generate_key(&req.queue, QueueSuffix::PENDING);
+    let done = generate_key(&req.queue, QueueSuffix::DONE);
     pipe
       .atomic()
       // Remove from tail to head as older tasks are at the end
-      .lrem(&pending, -1, task_id)
+      .lrem(&pending, -1, &req.task_id)
       .ignore()
-      .lpush(&done, task_id)
+      // Move it to finished queue
+      .lpush(&done, &req.task_id)
+      .ignore()
+      // Set status and message
+      // Two hset, otherwise we have to parse any of the two values. hset_multiple
+      // only accepts values of the same type.
+      .hset(&req.task_id, "status", req.status)
+      .ignore()
+      .hset(&req.task_id, "message", &req.message)
       .ignore()
       .query_async(self.connection())
       .await?;
     Ok(1)
   }
 
-  async fn fail(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
+  async fn fail(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
     const MAX_ATTEMPTS: u64 = 25; // TODO: Make it configurable
-    let attempts: u64 = self.connection().hget(task_id, "attempts").await?;
-  
+    let attempts: u64 = self.connection().hget(&req.task_id, "attempts").await?;
     if attempts < MAX_ATTEMPTS {
-      let pending = generate_key(queue, QueueSuffix::PENDING);
-      let member = member_from_id(task_id, queue);
+      let pending = generate_key(&req.queue, QueueSuffix::PENDING);
+      let member = member_from_id(&req.task_id, &req.queue);
       let score = time_to_delay(backoff_time(attempts));
       let mut pipe = redis::pipe();
 
       pipe
         .atomic()
-        .lrem(&pending, -1, task_id)
+        .lrem(&pending, -1, &req.task_id)
         .ignore()
         .zadd(QueueSuffix::DELAYED, &member, score)
         .query_async(self.connection())
         .await?;
     } else {
-      // TODO: Add error message
       // Moved task to finished queue
-      self.ack(task_id, queue).await?;
+      self.finish(req).await?;
     }
     Ok(1)
   }
