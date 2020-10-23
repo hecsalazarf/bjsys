@@ -857,6 +857,7 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "proto",
+ "rand",
  "redis",
  "tokio",
  "tonic",

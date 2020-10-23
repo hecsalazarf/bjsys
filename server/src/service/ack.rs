@@ -1,5 +1,5 @@
-use super::store::{RedisStorage, MultiplexedStore};
-use super::stub::tasks::AcknowledgeRequest;
+use super::store::{MultiplexedStore, RedisStorage};
+use super::stub::tasks::{AcknowledgeRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -62,19 +62,31 @@ impl AckWorker {
     self.tasks.insert(task.id, task.notify);
   }
 
-  async fn mark_done(&mut self, req: AcknowledgeRequest) -> Result<(), Status> {
-    match self.store.ack(&req.task_id, &req.queue).await {
+  async fn report(&mut self, request: AcknowledgeRequest) -> Result<(), Status> {
+    let status = TaskStatus::from_i32(request.status).unwrap(); // TODO: Handle None
+    let task_id = request.task_id;
+    let queue = request.queue;
+  
+    let res = match status {
+      TaskStatus::Done => self.store.ack(&task_id, &queue).await,
+      TaskStatus::Failed => self.store.fail(&task_id, &queue).await,
+      TaskStatus::Canceled => {
+        unimplemented!();
+      }
+    };
+
+    match res {
       Ok(r) => {
         if r > 0 {
-          info!("Task {} was completed", req.task_id);
-          if let Some(n) = self.tasks.remove(&Arc::new(req.task_id)) {
+          info!("Task {} reported with status {}", task_id, request.status);
+          if let Some(n) = self.tasks.remove(&Arc::new(task_id)) {
             n.notify();
           }
         }
         Ok(())
       }
       Err(e) => {
-        error!("Cannot ack task {}: {}", req.task_id, e);
+        error!("Cannot report task {}: {}", task_id, e);
         Err(Status::unavailable("Service not available"))
       }
     }
@@ -94,8 +106,8 @@ impl Handler<AckCmd> for AckWorker {
 
 #[tonic::async_trait]
 impl Handler<Acknowledge> for AckWorker {
-  async fn handle(&mut self, _ctx: &mut Context<Self>, ack: Acknowledge) -> Result<(), Status> {
-    self.mark_done(ack.0).await
+  async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), Status> {
+    self.report(req.0).await
   }
 }
 

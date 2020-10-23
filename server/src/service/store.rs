@@ -99,9 +99,9 @@ pub trait RedisStorage: Sized + Sync {
     let waiting = generate_key(&task.queue, QueueSuffix::WAITING);
     let mut buffer = IdGenerator::encode_buffer();
     let id = generate_id().encode(&mut buffer);
-    let mut pipeline = redis::pipe();
-    let pipeline = pipeline.atomic();
-    pipeline
+    let mut pipe = redis::pipe();
+    pipe
+      .atomic()
       .hset_multiple(
         id,
         &[
@@ -119,27 +119,15 @@ pub trait RedisStorage: Sized + Sync {
   }
 
   async fn create_delayed_task(&mut self, task: Task, delay: u64) -> Result<String, StoreError> {
-    let mut pipeline = redis::pipe();
-    let pipeline = pipeline.atomic();
+    let mut pipe = redis::pipe();
 
     let mut buffer = IdGenerator::encode_buffer();
     let id = generate_id().encode(&mut buffer);
-    let mut member = String::from(id);
-    member.push_str(":");
-    member.push_str(&task.queue);
+    let member = member_from_id(id, &task.queue);
+    let score = time_to_delay(delay);
 
-    let delay = Duration::from_millis(delay);
-    let now = SystemTime::now()
-      .duration_since(SystemTime::UNIX_EPOCH)
-      .unwrap();
-
-    let score = if let Some(d) = now.checked_add(delay) {
-      d.as_millis() as u64
-    } else {
-      u64::MAX
-    };
-
-    pipeline
+    pipe
+      .atomic()
       .hset_multiple(
         id,
         &[
@@ -168,19 +156,30 @@ pub trait RedisStorage: Sized + Sync {
     let waiting = generate_key(queue, QueueSuffix::WAITING);
     let pending = generate_key(queue, QueueSuffix::PENDING);
 
+    let mut pipe = redis::pipe();
     let id: String = self.connection().brpoplpush(&waiting, &pending, 0).await?;
-    let values: HashMap<String, String> = self.connection().hgetall(&id).await?;
+
+    let mut values: Vec<HashMap<String, String>> = pipe
+      .atomic()
+      .hgetall(&id)
+      .hincr(&id, "attempts", 1)
+      .ignore()
+      .query_async(self.connection())
+      .await?;
+
+    // Never fails, as a successful response always contains data
+    let values = values.pop().unwrap();
 
     Ok(Task::from_map(id, values))
   }
 
   async fn ack(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
-    let mut pipeline = redis::pipe();
-    let pipeline = pipeline.atomic();
+    let mut pipe = redis::pipe();
 
     let pending = generate_key(queue, QueueSuffix::PENDING);
     let done = generate_key(queue, QueueSuffix::DONE);
-    pipeline
+    pipe
+      .atomic()
       // Remove from tail to head as older tasks are at the end
       .lrem(&pending, -1, task_id)
       .ignore()
@@ -188,6 +187,31 @@ pub trait RedisStorage: Sized + Sync {
       .ignore()
       .query_async(self.connection())
       .await?;
+    Ok(1)
+  }
+
+  async fn fail(&mut self, task_id: &str, queue: &str) -> Result<usize, StoreError> {
+    const MAX_ATTEMPTS: u64 = 25; // TODO: Make it configurable
+    let attempts: u64 = self.connection().hget(task_id, "attempts").await?;
+  
+    if attempts < MAX_ATTEMPTS {
+      let pending = generate_key(queue, QueueSuffix::PENDING);
+      let member = member_from_id(task_id, queue);
+      let score = time_to_delay(backoff_time(attempts));
+      let mut pipe = redis::pipe();
+
+      pipe
+        .atomic()
+        .lrem(&pending, -1, task_id)
+        .ignore()
+        .zadd(QueueSuffix::DELAYED, &member, score)
+        .query_async(self.connection())
+        .await?;
+    } else {
+      // TODO: Add error message
+      // Moved task to finished queue
+      self.ack(task_id, queue).await?;
+    }
     Ok(1)
   }
 
@@ -308,6 +332,51 @@ impl Task {
 
 fn generate_key(queue: &str, suffix: &str) -> String {
   format!("{}_{}", queue, suffix)
+}
+
+/// Retries are computed with an exponential backoff. The formula is taken
+/// from the one used in Sidekiq.
+/// ```
+/// 15 + count ^ 4 + (rand(30) * (count + 1))
+/// ```
+/// * 15 establishes a minimum wait time.
+/// * count.^4 is our exponential, the 20th retry will 20^4 (160,000 sec), or about two days.
+/// * rand(30) gives us a random "smear". Sometimes people enqueue 1000s of jobs at one time,
+/// which all fail for the same reason. This ensures we don't retry 1000s of jobs all at the
+/// exact same time and take down a system.
+fn backoff_time(count: u64) -> u64 {
+  use rand::Rng;
+  const POWER: u32 = 4;
+
+  let mut rng = rand::thread_rng();
+  let rnd = rng.gen_range(1, 31);
+
+  // Multiplied by 1000 to obtain milliseconds
+  (15 + count.pow(POWER) + (rnd * (count + 1))) * 1000
+}
+
+/// Calculate the time in milliseconds at which a task should be processed.
+/// We add the current time to the given delay.
+fn time_to_delay(delay: u64) -> u64 {
+  let delay = Duration::from_millis(delay);
+  let now = SystemTime::now()
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .unwrap();
+
+  if let Some(d) = now.checked_add(delay) {
+    d.as_millis() as u64
+  } else {
+    u64::MAX
+  }
+}
+
+/// Create the member string for the delayed sorted set.
+fn member_from_id(id: &str, queue: &str) -> String {
+  let mut member = String::from(id);
+  member.push_str(":");
+  member.push_str(queue);
+
+  member
 }
 
 use redis::{Script, ScriptInvocation};
