@@ -164,6 +164,9 @@ pub trait RedisStorage: Sized + Sync {
       .hgetall(&id)
       .hincr(&id, "attempts", 1)
       .ignore()
+      // Set timestamp
+      .hset(&id, "processed_on", now_as_millis())
+      .ignore()
       .query_async(self.connection())
       .await?;
 
@@ -187,11 +190,14 @@ pub trait RedisStorage: Sized + Sync {
       .lpush(&done, &req.task_id)
       .ignore()
       // Set status and message
-      // Two hset, otherwise we have to parse any of the two values. hset_multiple
+      // Repeated hset, otherwise we have to parse any of the values. hset_multiple
       // only accepts values of the same type.
       .hset(&req.task_id, "status", req.status)
       .ignore()
       .hset(&req.task_id, "message", &req.message)
+      .ignore()
+      // Set timestamp
+      .hset(&req.task_id, "finished_on", now_as_millis())
       .ignore()
       .query_async(self.connection())
       .await?;
@@ -222,10 +228,7 @@ pub trait RedisStorage: Sized + Sync {
   }
 
   async fn schedule_delayed(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
-    let max = SystemTime::now()
-      .duration_since(SystemTime::UNIX_EPOCH)
-      .unwrap()
-      .as_millis() as u64;
+    let max = now_as_millis();
 
     self
       .script()
@@ -383,6 +386,14 @@ fn member_from_id(id: &str, queue: &str) -> String {
   member.push_str(queue);
 
   member
+}
+
+/// Return the current time in milliseconds as u64
+fn now_as_millis() -> u64 {
+  SystemTime::now()
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .unwrap()
+    .as_millis() as u64
 }
 
 use redis::{Script, ScriptInvocation};
