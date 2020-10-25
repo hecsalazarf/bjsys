@@ -104,6 +104,8 @@ pub trait RedisStorage: Sized + Sync {
       .atomic()
       .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
       .ignore()
+      .hset(id, "retry", req.retry)
+      .ignore()
       .lpush(&waiting, id)
       .ignore()
       .query_async(self.connection())
@@ -127,6 +129,8 @@ pub trait RedisStorage: Sized + Sync {
       .atomic()
       .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
       .ignore()
+      .hset(id, "retry", req.retry)
+      .ignore()
       .zadd(QueueSuffix::DELAYED, &member, score)
       .ignore()
       .query_async(self.connection())
@@ -140,7 +144,7 @@ pub trait RedisStorage: Sized + Sync {
   //     .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
 
   //   self.read_stream(key, "0", opts).await
-  // }
+  // }with
 
   async fn read_new(&mut self, queue: &str) -> Result<FetchResponse, StoreError> {
     let waiting = generate_key(queue, QueueSuffix::WAITING);
@@ -152,7 +156,7 @@ pub trait RedisStorage: Sized + Sync {
     let mut values: Vec<HashMap<String, String>> = pipe
       .atomic()
       .hgetall(&id)
-      .hincr(&id, "attempts", 1)
+      .hincr(&id, "deliveries", 1)
       .ignore()
       // Set timestamp
       .hset(&id, "processed_on", now_as_millis())
@@ -195,13 +199,22 @@ pub trait RedisStorage: Sized + Sync {
   }
 
   async fn fail(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
-    const MAX_ATTEMPTS: u64 = 25; // TODO: Make it configurable
-    let attempts: u64 = self.connection().hget(&req.task_id, "attempts").await?;
-    if attempts < MAX_ATTEMPTS {
+    let mut pipe = redis::pipe();
+
+    let (deliveries, retry): (u64, u64) = pipe
+      .atomic()
+      .hget(&req.task_id, "deliveries")
+      .hget(&req.task_id, "retry")
+      .query_async(self.connection())
+      .await?;
+
+    // Substract one not to consider the first delivery as an attempt
+    if (deliveries - 1) < retry {
       let pending = generate_key(&req.queue, QueueSuffix::PENDING);
       let member = member_from_id(&req.task_id, &req.queue);
-      let score = time_to_delay(backoff_time(attempts));
-      let mut pipe = redis::pipe();
+      let score = time_to_delay(backoff_time(deliveries));
+
+      pipe.clear(); // Clear pipeline to reuse it
 
       pipe
         .atomic()
