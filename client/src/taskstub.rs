@@ -1,9 +1,13 @@
 /// Create Request
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateRequest {
-  #[prost(message, optional, tag = "1")]
-  pub task: ::std::option::Option<Task>,
-  #[prost(uint64, tag = "2")]
+  #[prost(string, tag = "1")]
+  pub queue: std::string::String,
+  #[prost(string, tag = "2")]
+  pub data: std::string::String,
+  #[prost(uint32, tag = "3")]
+  pub retry: u32,
+  #[prost(uint64, tag = "4")]
   pub delay: u64,
 }
 /// Create Response
@@ -21,10 +25,12 @@ pub struct AcknowledgeRequest {
   pub queue: std::string::String,
   #[prost(enumeration = "TaskStatus", tag = "3")]
   pub status: i32,
+  #[prost(string, tag = "4")]
+  pub message: std::string::String,
 }
-/// Consumer details
+/// Fetch Request
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Consumer {
+pub struct FetchRequest {
   #[prost(string, tag = "1")]
   pub hostname: std::string::String,
   #[prost(string, tag = "2")]
@@ -36,16 +42,14 @@ pub struct Consumer {
   #[prost(uint32, tag = "5")]
   pub workers: u32,
 }
-/// Task
+/// FetchResponse
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Task {
+pub struct FetchResponse {
   #[prost(string, tag = "1")]
   pub id: std::string::String,
   #[prost(string, tag = "2")]
-  pub kind: std::string::String,
-  #[prost(string, tag = "3")]
   pub queue: std::string::String,
-  #[prost(string, tag = "4")]
+  #[prost(string, tag = "3")]
   pub data: std::string::String,
 }
 /// Empty response
@@ -56,8 +60,8 @@ pub struct Empty {}
 #[repr(i32)]
 pub enum TaskStatus {
   Done = 0,
-  Canceled = 1,
-  Failed = 2,
+  Failed = 1,
+  Canceled = 2,
 }
 #[doc = r" Generated client implementations."]
 pub mod tasks_core_client {
@@ -122,11 +126,11 @@ pub mod tasks_core_client {
       let path = http::uri::PathAndQuery::from_static("/taskstub.TasksCore/Acknowledge");
       self.inner.unary(request.into_request(), path, codec).await
     }
-    #[doc = " Consumer that connects to process tasks (consumer)"]
+    #[doc = " Fetch to process tasks (consumer)"]
     pub async fn fetch(
       &mut self,
-      request: impl tonic::IntoRequest<super::Consumer>,
-    ) -> Result<tonic::Response<tonic::codec::Streaming<super::Task>>, tonic::Status> {
+      request: impl tonic::IntoRequest<super::FetchRequest>,
+    ) -> Result<tonic::Response<tonic::codec::Streaming<super::FetchResponse>>, tonic::Status> {
       self.inner.ready().await.map_err(|e| {
         tonic::Status::new(
           tonic::Code::Unknown,

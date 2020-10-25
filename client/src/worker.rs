@@ -1,6 +1,5 @@
-use crate::task::TaskStub;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
-use crate::taskstub::{AcknowledgeRequest, Consumer};
+use crate::taskstub::{AcknowledgeRequest, FetchRequest};
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context, Handler};
@@ -8,9 +7,12 @@ use xactor::{message, Actor, Addr, Context, Handler};
 pub use tonic::transport::Error as ChannelError;
 pub use tonic::{Request, Status as ChannelStatus};
 
+// TODO: Transform fetch response into Task. Do not expose FetchTesponse
+pub use crate::taskstub::FetchResponse;
+
 #[derive(Debug)]
 pub struct WorkerBuilder<P: Processor> {
-  consumer: Consumer,
+  consumer: FetchRequest,
   endpoint: Endpoint,
   processor: Option<P>,
 }
@@ -18,11 +20,11 @@ pub struct WorkerBuilder<P: Processor> {
 impl<P: Processor> Default for WorkerBuilder<P> {
   fn default() -> Self {
     let endpoint = Endpoint::from_static("http://localhost:11000");
-    let consumer = Consumer {
+    let consumer = FetchRequest {
       hostname: String::from("rust"),
       queue: String::from("default"),
       workers: 1,
-      ..Consumer::default()
+      ..FetchRequest::default()
     };
 
     Self {
@@ -84,7 +86,7 @@ enum WorkerCmd {
 }
 
 struct WorkerProcessor<P: Processor> {
-  consumer: Consumer,
+  consumer: FetchRequest,
   client: Client<Channel>,
   processor: P,
 }
@@ -106,6 +108,7 @@ impl<P: Processor> WorkerProcessor<P> {
         queue: task.queue,
         task_id: task.id,
         status: 0,
+        message: String::new(),
       };
       if let Err(e) = self.client.acknowledge(ack).await {
         println!("Ack error = {:?}", e);
@@ -133,5 +136,5 @@ pub enum ProcessError {
 
 #[tonic::async_trait]
 pub trait Processor: Sized + Send + 'static {
-  async fn process(&mut self, task: &TaskStub) -> Result<(), ProcessError>;
+  async fn process(&mut self, task: &FetchResponse) -> Result<(), ProcessError>;
 }

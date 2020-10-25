@@ -1,4 +1,4 @@
-pub use crate::taskstub::Task as TaskStub;
+pub use crate::taskstub::CreateRequest;
 use serde::Serialize;
 
 pub use serde_json::Error as DataError;
@@ -8,6 +8,8 @@ pub struct Task {
   id: Option<String>,
   kind: String,
   data: Option<String>,
+  delay: u64,
+  retry: u32,
 }
 
 impl Task {
@@ -41,15 +43,15 @@ impl Task {
     self.data.as_ref()
   }
 
-  pub fn into_stub<T>(self, queue: T) -> TaskStub
+  pub fn into_stub<T>(self, queue: T) -> CreateRequest
   where
     T: Into<String>,
   {
-    TaskStub {
-      id: self.id.unwrap_or_else(String::new),
-      kind: self.kind,
+    CreateRequest {
       data: self.data.unwrap_or_else(String::new),
       queue: queue.into(),
+      delay: self.delay,
+      retry: self.retry,
     }
   }
 }
