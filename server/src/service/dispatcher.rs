@@ -190,8 +190,9 @@ impl QueueDispatcher {
   }
 
   async fn stop_all(&mut self) {
-    for worker in self.workers.values() {
-      if let Some(ref task) = worker.pending_task {
+    let all = self.workers.drain();
+    for (_, worker) in all {
+      if let Some(task) = worker.pending_task {
         task.finish();
       }
       worker.exit.notify();

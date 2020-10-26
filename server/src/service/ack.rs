@@ -28,7 +28,7 @@ impl AckManager {
   }
 
   pub fn in_process(&self, task_id: String) -> WaitingTask {
-    let waiting = WaitingTask::new(task_id);
+    let waiting = WaitingTask::new(task_id, self.worker.clone());
     self
       .worker
       .send(AckCmd::InProcess(waiting.clone()))
@@ -40,6 +40,7 @@ impl AckManager {
 #[message]
 enum AckCmd {
   InProcess(WaitingTask),
+  Remove(Arc<String>)
 }
 
 #[message(result = "Result<(), Status>")]
@@ -60,6 +61,10 @@ impl AckWorker {
 
   fn in_process(&mut self, task: WaitingTask) {
     self.tasks.insert(task.id, task.notify);
+  }
+
+  fn remove_active(&mut self, id: Arc<String>) {
+    self.tasks.remove(&id);
   }
 
   async fn report(&mut self, request: AcknowledgeRequest) -> Result<(), Status> {
@@ -111,13 +116,15 @@ impl Handler<Acknowledge> for AckWorker {
 pub struct WaitingTask {
   id: Arc<String>,
   notify: Arc<Notify>,
+  worker: Addr<AckWorker>
 }
 
 impl WaitingTask {
-  pub fn new(id: String) -> Self {
+  fn new(id: String, worker: Addr<AckWorker>) -> Self {
     Self {
       id: Arc::new(id),
       notify: Arc::new(Notify::new()),
+      worker,
     }
   }
 
@@ -125,8 +132,9 @@ impl WaitingTask {
     self.notify.notified().await;
   }
 
-  pub fn finish(&self) {
+  pub fn finish(self) {
     self.notify.notify();
+    self.worker.send(AckCmd::Remove(self.id)).expect("fail_to_finish");
   }
 }
 

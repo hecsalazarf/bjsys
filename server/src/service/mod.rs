@@ -27,7 +27,7 @@ impl TasksService {
     let store = MultiplexedStore::connect().await?;
     let ack_manager = AckManager::init(store.clone()).await?;
     let dispatcher = MasterDispatcher::init(store.clone(), ack_manager.clone()).await;
-    let _scheduler = Scheduler::init(store.clone()).await;
+    let _scheduler = Scheduler::init(store.clone(), ack_manager.clone()).await;
     Ok(TasksCoreServer::new(TasksService {
       store: store,
       ack_manager,
