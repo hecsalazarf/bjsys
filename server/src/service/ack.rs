@@ -40,7 +40,7 @@ impl AckManager {
 #[message]
 enum AckCmd {
   InProcess(WaitingTask),
-  Remove(Arc<String>)
+  Remove(Arc<String>),
 }
 
 #[message(result = "Result<(), Status>")]
@@ -69,7 +69,6 @@ impl AckWorker {
 
   async fn report(&mut self, request: AcknowledgeRequest) -> Result<(), Status> {
     let status = TaskStatus::from_i32(request.status).unwrap(); // TODO: Handle None
- 
     let res = match status {
       TaskStatus::Done => self.store.finish(&request).await,
       TaskStatus::Failed => self.store.fail(&request).await,
@@ -79,7 +78,10 @@ impl AckWorker {
     match res {
       Ok(r) => {
         if r > 0 {
-          info!("Task {} reported with status {}", request.task_id, request.status);
+          info!(
+            "Task {} reported with status {}",
+            request.task_id, request.status
+          );
           if let Some(n) = self.tasks.remove(&Arc::new(request.task_id)) {
             n.notify();
           }
@@ -101,6 +103,7 @@ impl Handler<AckCmd> for AckWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: AckCmd) {
     match cmd {
       AckCmd::InProcess(t) => self.in_process(t),
+      AckCmd::Remove(id) => self.remove_active(id),
     }
   }
 }
@@ -112,11 +115,11 @@ impl Handler<Acknowledge> for AckWorker {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WaitingTask {
   id: Arc<String>,
   notify: Arc<Notify>,
-  worker: Addr<AckWorker>
+  worker: Addr<AckWorker>,
 }
 
 impl WaitingTask {
@@ -134,7 +137,10 @@ impl WaitingTask {
 
   pub fn finish(self) {
     self.notify.notify();
-    self.worker.send(AckCmd::Remove(self.id)).expect("fail_to_finish");
+    self
+      .worker
+      .send(AckCmd::Remove(self.id))
+      .expect("fail_to_finish");
   }
 }
 

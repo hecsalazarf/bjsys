@@ -11,7 +11,6 @@ use tracing::{error, info};
 
 use ack::AckManager;
 use dispatcher::{MasterDispatcher, TaskStream};
-use scheduler::Scheduler;
 use store::{MultiplexedStore, RedisStorage};
 
 pub struct TasksService {
@@ -19,7 +18,6 @@ pub struct TasksService {
   store: MultiplexedStore,
   ack_manager: AckManager,
   dispatcher: MasterDispatcher,
-  _scheduler: Scheduler,
 }
 
 impl TasksService {
@@ -27,12 +25,10 @@ impl TasksService {
     let store = MultiplexedStore::connect().await?;
     let ack_manager = AckManager::init(store.clone()).await?;
     let dispatcher = MasterDispatcher::init(store.clone(), ack_manager.clone()).await;
-    let _scheduler = Scheduler::init(store.clone(), ack_manager.clone()).await;
     Ok(TasksCoreServer::new(TasksService {
       store: store,
       ack_manager,
       dispatcher,
-      _scheduler,
     }))
   }
 

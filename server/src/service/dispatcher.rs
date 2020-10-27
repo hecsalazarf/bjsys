@@ -1,4 +1,5 @@
 use super::ack::{AckManager, WaitingTask};
+use super::scheduler::QueueScheduler;
 use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
 use super::stub::tasks::FetchResponse;
 use super::ServiceCmd;
@@ -69,7 +70,7 @@ impl MasterWorker {
         .expect("failed_connect_store");
       let conn_id = reader.id();
       let reader = reader.start().await?;
-      let qd = QueueDispatcher::new(queue.clone(), addr);
+      let qd = QueueDispatcher::new(queue.clone(), addr, self.store.clone());
       let addr = qd.start().await?;
       let record = DispatcherRecord {
         addr: addr.clone(),
@@ -167,17 +168,21 @@ pub struct QueueDispatcher {
   workers: HashMap<u64, WorkerRecord>,
   master: Addr<MasterWorker>,
   name: Arc<String>,
+  scheduler: QueueScheduler,
 }
 
 impl QueueDispatcher {
-  fn new(name: Arc<String>, master: Addr<MasterWorker>) -> Self {
+  fn new(name: Arc<String>, master: Addr<MasterWorker>, store: MultiplexedStore) -> Self {
     let workers = HashMap::new();
+    let scheduler = QueueScheduler::new(name.clone(), store);
     Self {
       name,
       master,
       workers,
+      scheduler,
     }
   }
+
   async fn stop_worker(&mut self, id: u64) -> usize {
     // Never fails as it was created before
     let worker = self.workers.remove(&id).unwrap();
@@ -222,11 +227,13 @@ impl Actor for QueueDispatcher {
       .call(MasterCmd::Unregister(self.name.clone()))
       .await
       .unwrap();
+    self.scheduler.stop().expect("stop_scheduler");
     debug!("Queue '{}' is no longer being served", self.name);
   }
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
     ctx.subscribe::<ServiceCmd>().await.expect("sub_to_shut");
+    self.scheduler.start().await?;
     debug!("Queue '{}' is being dispatched", self.name,);
     Ok(())
   }
@@ -309,11 +316,11 @@ impl QueueReader {
 #[tonic::async_trait]
 impl Actor for QueueReader {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    debug!("QueueReader '{}' stopped", self.key);
+    debug!("Reader '{}' stopped", self.key);
   }
 
   async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    debug!("QueueReader '{}' is delivering", self.key);
+    debug!("Reader '{}' is delivering", self.key);
     Ok(())
   }
 }
