@@ -138,13 +138,10 @@ pub trait RedisStorage: Sized + Sync {
     Ok(String::from(id))
   }
 
-  // async fn read_pending(&mut self, key: &str, count: usize) -> Result<VecDeque<FetchResponse>, StoreError> {
-  //   let opts = StreamReadOptions::default()
-  //     .count(count)
-  //     .group(StreamDefs::DEFAULT_GROUP, StreamDefs::DEFAULT_CONSUMER);
-
-  //   self.read_stream(key, "0", opts).await
-  // }with
+  async fn read_pending(&mut self, queue: &str) -> Result<Vec<String>, StoreError> {
+    let pending = generate_key(queue, QueueSuffix::PENDING);
+    self.connection().lrange(pending, 0, -1).await
+  }
 
   async fn read_new(&mut self, queue: &str) -> Result<FetchResponse, StoreError> {
     let waiting = generate_key(queue, QueueSuffix::WAITING);
@@ -241,6 +238,25 @@ pub trait RedisStorage: Sized + Sync {
       .arg(limit)
       .invoke_async(self.connection())
       .await
+  }
+
+  async fn renqueue<I>(&mut self, queue: &str, ids: I) -> Result<(), StoreError>
+  where
+    I: Send + Iterator<Item = String>,
+  {
+    let pending = generate_key(queue, QueueSuffix::PENDING);
+    let waiting = generate_key(queue, QueueSuffix::WAITING);
+    let mut pipe = redis::pipe();
+    let pipe = pipe.atomic();
+
+    for id in ids {
+      pipe
+        .lrem(&pending, -1, &id)
+        .ignore()
+        .lpush(&waiting, &id)
+        .ignore();
+    }
+    pipe.query_async(self.connection()).await
   }
 }
 

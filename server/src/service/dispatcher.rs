@@ -6,7 +6,7 @@ use super::ServiceCmd;
 use core::task::Poll;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::task::Context;
 use tokio::{
   stream::Stream,
@@ -215,6 +215,15 @@ impl QueueDispatcher {
       w.pending_task.take();
     }
   }
+
+  fn active(&mut self) -> Vec<Weak<String>> {
+    let map = self.workers.iter().filter_map(|(_, record)| {
+      // Map all active tasks being processed, returning its ID
+      record.pending_task.as_ref().map(|task| task.id())
+    });
+
+    map.collect()
+  }
 }
 
 #[tonic::async_trait]
@@ -233,7 +242,7 @@ impl Actor for QueueDispatcher {
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
     ctx.subscribe::<ServiceCmd>().await.expect("sub_to_shut");
-    self.scheduler.start().await?;
+    self.scheduler.start(ctx.address()).await?;
     debug!("Queue '{}' is being dispatched", self.name,);
     Ok(())
   }
@@ -246,6 +255,9 @@ enum DispatcherCmd {
   Init(u64, WorkerRecord),
   Disconnect(u64),
 }
+
+#[message(result = "Vec<Weak<String>>")]
+pub struct ActiveTasks;
 
 #[tonic::async_trait]
 impl Handler<DispatcherCmd> for QueueDispatcher {
@@ -280,24 +292,25 @@ impl Handler<ServiceCmd> for QueueDispatcher {
   }
 }
 
+#[tonic::async_trait]
+impl Handler<ActiveTasks> for QueueDispatcher {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<String>> {
+    self.active()
+  }
+}
+
 struct QueueReader {
   key: String,
   store: Store,
-  // queue: VecDeque<FetchResponse>,
-  // pending: bool,
 }
 
 impl QueueReader {
   pub async fn connect(queue: &str) -> Result<Self, StoreError> {
     let key = String::from(queue);
-    // let queue = VecDeque::with_capacity(5);
-    // let pending = true;
     let store = Store::connect().await?;
 
     Ok(Self {
       key,
-      // queue,
-      // pending,
       store,
     })
   }
@@ -307,7 +320,6 @@ impl QueueReader {
   }
 
   pub async fn read(&mut self) -> Result<Option<FetchResponse>, StoreError> {
-    // TODO: How to handle pending tasks?
     let task = self.store.read_new(&self.key).await?;
     Ok(Some(task))
   }

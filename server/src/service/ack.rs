@@ -2,7 +2,7 @@ use super::store::{MultiplexedStore, RedisStorage};
 use super::stub::tasks::{AcknowledgeRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::Notify;
 use tonic::Status;
 use tracing::{error, info};
@@ -129,6 +129,10 @@ impl WaitingTask {
       notify: Arc::new(Notify::new()),
       worker,
     }
+  }
+
+  pub fn id(&self) -> Weak<String> {
+    Arc::downgrade(&self.id)
   }
 
   pub async fn wait_to_finish(&self) {
