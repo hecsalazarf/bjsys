@@ -4,16 +4,14 @@ version = "0.1.0"
 authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 tonic = "0.3.1"
 prost = "0.6.1"
 tokio = { version = "0.2.22", features = ["macros", "sync", "stream", "time", "rt-threaded", "signal"] }
-tracing = "0.1.19"
-tracing-subscriber = "0.2.11"
+tracing = "0.1.21"
+tracing-subscriber = "0.2.14"
 redis = { version = "0.17.0", default-features = false, features = ["tokio-rt-core", "streams", "script"] }
-xactor = { version = "0.7.7", default-features = false, features = ["runtime-tokio"] }
+xactor = { version = "0.7.8", default-features = false, features = ["runtime-tokio"] }
 rand = "0.7.3"
 utils = { path = "../utils" }
 
