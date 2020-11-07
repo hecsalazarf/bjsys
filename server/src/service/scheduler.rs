@@ -73,9 +73,10 @@ impl SchedulerWorker {
       error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
     };
 
-    let pending = match self.store.read_pending(self.queue.as_ref()).await {
+    let queue = self.queue.as_ref();
+    let pending = match self.store.read_pending(queue).await {
       Err(e) => {
-        log_error(self.queue.as_ref(), e);
+        log_error(queue, e);
         Vec::new()
       }
       Ok(pending) => pending,
@@ -90,27 +91,25 @@ impl SchedulerWorker {
     // Active-tasks call only fails when the dispatcher dropped. In such
     // case, we simply exit
     if let Ok(mut active) = dispatcher.call(ActiveTasks).await {
-      let mut active = active.iter_mut();
-
-      // Reverse iterator to insert from right to left in order to respect
-      // the order in which they were added
+      // Reverse iterator from right to left to respect the order in which they
+      // were inserted. Then, filter pending tasks that are not active (stalled). 
       let stalled = pending.into_iter().rev().filter(|p| {
-        // Filter pending task that are not active (stalled)
-        let found = active.find(|a| {
-          // We first get the reference from Weak pointer
+        // Create a new itetator from active vec for every search.
+        let found = active.iter_mut().find(|a| {
+          // We first get the reference from Weak pointer.
           if let Some(id) = a.upgrade() {
-            // Determine if the active ID is in the pending list
+            // Determine if the active ID is in the pending list.
             return id.as_ref() == p;
           }
           false
         });
 
-        // We only care of values not found, i.e, not active.
+        // We only care of values not found, i.e., stalled.
         found.is_none()
       });
 
-      if let Err(e) = self.store.renqueue(self.queue.as_ref(), stalled).await {
-        log_error(self.queue.as_ref(), e);
+      if let Err(e) = self.store.renqueue(queue, stalled).await {
+        log_error(queue, e);
       }
     }
   }
