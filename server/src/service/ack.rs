@@ -111,7 +111,13 @@ impl Handler<AckCmd> for AckWorker {
 #[tonic::async_trait]
 impl Handler<Acknowledge> for AckWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), Status> {
-    self.report(req.0).await
+    let req = req.0; // Unwrap request
+    if self.tasks.contains_key(&req.task_id) {
+      // Report task only if it's pending
+      self.report(req).await
+    } else {
+      Err(Status::invalid_argument("Task is not pending"))
+    }
   }
 }
 
