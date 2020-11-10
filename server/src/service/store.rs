@@ -18,6 +18,19 @@ impl QueueSuffix {
   const WAITING: &'static str = "waiting";
 }
 
+struct TaskHash;
+
+impl TaskHash {
+  const DATA: &'static str = "data";
+  const QUEUE: &'static str = "queue";
+  const RETRY: &'static str = "retry";
+  const DELIVERIES: &'static str = "deliveries";
+  const STATUS: &'static str = "status";
+  const MESSAGE: &'static str = "message";
+  const PROCESSED_ON: &'static str = "processed_on";
+  const FINISHED_ON: &'static str = "finished_on";
+}
+
 #[tonic::async_trait]
 pub trait InnerConnection: Sized + ConnectionLike {
   async fn create(conn_info: ConnectionInfo) -> Result<Self, StoreError>;
@@ -102,9 +115,12 @@ pub trait RedisStorage: Sized + Sync {
     let mut pipe = redis::pipe();
     pipe
       .atomic()
-      .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
+      .hset_multiple(
+        id,
+        &[(TaskHash::DATA, &req.data), (TaskHash::QUEUE, &req.queue)],
+      )
       .ignore()
-      .hset(id, "retry", req.retry)
+      .hset(id, TaskHash::RETRY, req.retry)
       .ignore()
       .lpush(&waiting, id)
       .ignore()
@@ -127,9 +143,12 @@ pub trait RedisStorage: Sized + Sync {
 
     pipe
       .atomic()
-      .hset_multiple(id, &[("data", &req.data), ("queue", &req.queue)])
+      .hset_multiple(
+        id,
+        &[(TaskHash::DATA, &req.data), (TaskHash::QUEUE, &req.queue)],
+      )
       .ignore()
-      .hset(id, "retry", req.retry)
+      .hset(id, TaskHash::RETRY, req.retry)
       .ignore()
       .zadd(QueueSuffix::DELAYED, &member, score)
       .ignore()
@@ -153,10 +172,10 @@ pub trait RedisStorage: Sized + Sync {
     let mut values: Vec<HashMap<String, String>> = pipe
       .atomic()
       .hgetall(&id)
-      .hincr(&id, "deliveries", 1)
+      .hincr(&id, TaskHash::DELIVERIES, 1)
       .ignore()
       // Set timestamp
-      .hset(&id, "processed_on", now_as_millis())
+      .hset(&id, TaskHash::PROCESSED_ON, now_as_millis())
       .ignore()
       .query_async(self.connection())
       .await?;
@@ -183,12 +202,12 @@ pub trait RedisStorage: Sized + Sync {
       // Set status and message
       // Repeated hset, otherwise we have to parse any of the values. hset_multiple
       // only accepts values of the same type.
-      .hset(&req.task_id, "status", req.status)
+      .hset(&req.task_id, TaskHash::STATUS, req.status)
       .ignore()
-      .hset(&req.task_id, "message", &req.message)
+      .hset(&req.task_id, TaskHash::MESSAGE, &req.message)
       .ignore()
       // Set timestamp
-      .hset(&req.task_id, "finished_on", now_as_millis())
+      .hset(&req.task_id, TaskHash::FINISHED_ON, now_as_millis())
       .ignore()
       .query_async(self.connection())
       .await?;
@@ -200,8 +219,8 @@ pub trait RedisStorage: Sized + Sync {
 
     let (deliveries, retry): (u64, u64) = pipe
       .atomic()
-      .hget(&req.task_id, "deliveries")
-      .hget(&req.task_id, "retry")
+      .hget(&req.task_id, TaskHash::DELIVERIES)
+      .hget(&req.task_id, TaskHash::RETRY)
       .query_async(self.connection())
       .await?;
 
