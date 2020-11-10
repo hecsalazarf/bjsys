@@ -134,12 +134,12 @@ pub trait RedisStorage: Sized + Sync {
     req: &CreateRequest,
     delay: u64,
   ) -> Result<String, StoreError> {
-    let mut pipe = redis::pipe();
-
+    let delayed = generate_key(&req.queue, QueueSuffix::DELAYED);
     let mut buffer = IdGenerator::encode_buffer();
     let id = generate_id().encode(&mut buffer);
     let member = member_from_id(id, &req.queue);
     let score = time_to_delay(delay);
+    let mut pipe = redis::pipe();
 
     pipe
       .atomic()
@@ -150,7 +150,7 @@ pub trait RedisStorage: Sized + Sync {
       .ignore()
       .hset(id, TaskHash::RETRY, req.retry)
       .ignore()
-      .zadd(QueueSuffix::DELAYED, &member, score)
+      .zadd(delayed, &member, score)
       .ignore()
       .query_async(self.connection())
       .await?;
@@ -246,13 +246,14 @@ pub trait RedisStorage: Sized + Sync {
     Ok(1)
   }
 
-  async fn schedule_delayed(&mut self, limit: u16) -> Result<Vec<String>, StoreError> {
+  async fn schedule_delayed(&mut self, queue: &str, limit: u16) -> Result<Vec<String>, StoreError> {
+    let delayed = generate_key(queue, QueueSuffix::DELAYED);
     let max = now_as_millis();
 
     self
       .script()
       .prepare_for(ScriptStore::SCHEDULE_DELAY)
-      .key("delayed")
+      .key(delayed)
       .arg(max)
       .arg(limit)
       .invoke_async(self.connection())
@@ -364,8 +365,8 @@ impl RedisStorage for MultiplexedStore {
 
 impl FetchResponse {
   fn from_map(id: String, mut values: HashMap<String, String>) -> Self {
-    let data = values.remove("data").unwrap_or_default();
-    let queue = values.remove("queue").unwrap_or_default();
+    let data = values.remove(TaskHash::DATA).unwrap_or_default();
+    let queue = values.remove(TaskHash::QUEUE).unwrap_or_default();
 
     FetchResponse { id, queue, data }
   }

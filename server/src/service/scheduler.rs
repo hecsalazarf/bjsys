@@ -60,7 +60,7 @@ impl SchedulerWorker {
   }
 
   async fn poll_delayed(&mut self) {
-    if let Err(e) = self.store.schedule_delayed(5).await {
+    if let Err(e) = self.store.schedule_delayed(self.queue.as_ref(), 5).await {
       error!(
         "Failed to schedule delayed tasks of '{}': {}",
         self.queue, e
@@ -92,7 +92,7 @@ impl SchedulerWorker {
     // case, we simply exit
     if let Ok(mut active) = dispatcher.call(ActiveTasks).await {
       // Reverse iterator from right to left to respect the order in which they
-      // were inserted. Then, filter pending tasks that are not active (stalled). 
+      // were inserted. Then, filter pending tasks that are not active (stalled).
       let stalled = pending.into_iter().rev().filter(|p| {
         // Create a new itetator from active vec for every search.
         let found = active.iter_mut().find(|a| {
