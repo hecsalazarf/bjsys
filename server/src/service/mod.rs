@@ -7,7 +7,7 @@ pub mod stub;
 use stub::tasks::server::{TasksCore, TasksCoreServer};
 use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use tonic::{Request, Response, Status};
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 use ack::AckManager;
 use dispatcher::{MasterDispatcher, TaskStream};
@@ -61,7 +61,7 @@ impl TasksCore for TasksService {
 
     res
       .map(|r| {
-        info!("Task created with id {}", r);
+        debug!("Task created with id {}", r);
         Response::new(CreateResponse { task_id: r })
       })
       .map_err(|e| {

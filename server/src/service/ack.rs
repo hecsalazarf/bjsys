@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 use tokio::sync::Notify;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::{error, debug};
 use xactor::{message, Actor, Addr, Context, Handler};
 
 #[derive(Clone)]
@@ -78,7 +78,7 @@ impl AckWorker {
     match res {
       Ok(r) => {
         if r > 0 {
-          info!(
+          debug!(
             "Task {} reported with status {}",
             request.task_id, request.status
           );

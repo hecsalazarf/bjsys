@@ -13,7 +13,7 @@ use tokio::{
   sync::{mpsc, Notify},
 };
 use tonic::Status;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
 
 pub struct MasterDispatcher {
@@ -463,7 +463,7 @@ impl From<Dispatcher> for DispatchWorker {
 #[tonic::async_trait]
 impl Actor for DispatchWorker {
   async fn stopped(&mut self, ctx: &mut ActorContext<Self>) {
-    info!(
+    debug!(
       "Worker [{}] disconnected from '{}'",
       ctx.actor_id(),
       self.queue
@@ -471,7 +471,7 @@ impl Actor for DispatchWorker {
   }
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    info!("Worker [{}] connected to '{}'", ctx.actor_id(), self.queue);
+    debug!("Worker [{}] connected to '{}'", ctx.actor_id(), self.queue);
     Ok(())
   }
 }
