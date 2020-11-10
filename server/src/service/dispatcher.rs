@@ -83,7 +83,7 @@ impl MasterWorker {
   }
 
   async fn unregister(&mut self, queue: Arc<String>) {
-    if let Some(mut r) = self.dispatchers.remove(&queue) {
+    if let Some(mut r) = self.dispatchers.remove(queue.as_ref()) {
       let conn_id = r.conn_id;
       self.store.stop_by_id(std::iter::once(conn_id)).await;
       r.reader.stop(None).expect("failed_stop_reader");

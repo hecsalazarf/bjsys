@@ -82,7 +82,7 @@ impl AckWorker {
             "Task {} reported with status {}",
             request.task_id, request.status
           );
-          if let Some(n) = self.tasks.remove(&Arc::new(request.task_id)) {
+          if let Some(n) = self.tasks.remove(&request.task_id) {
             n.notify();
           }
         }
