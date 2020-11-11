@@ -5,7 +5,7 @@ mod store;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AcknowledgeRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
+use stub::tasks::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, debug};
 
@@ -70,7 +70,7 @@ impl TasksCore for TasksService {
       })
   }
 
-  async fn acknowledge(&self, request: Request<AcknowledgeRequest>) -> ServiceResult<Empty> {
+  async fn ack(&self, request: Request<AckRequest>) -> ServiceResult<Empty> {
     self
       .ack_manager
       .check(request.into_inner())

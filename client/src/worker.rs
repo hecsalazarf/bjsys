@@ -1,5 +1,5 @@
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
-use crate::taskstub::{AcknowledgeRequest, FetchRequest};
+use crate::taskstub::{AckRequest, FetchRequest};
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context, Handler};
@@ -23,7 +23,6 @@ impl<P: Processor> Default for WorkerBuilder<P> {
     let consumer = FetchRequest {
       hostname: String::from("rust"),
       queue: String::from("default"),
-      workers: 1,
       ..FetchRequest::default()
     };
 
@@ -104,13 +103,13 @@ impl<P: Processor> WorkerProcessor<P> {
         println!("Process error = {:?}", e);
         // TODO: Send ack with error
       }
-      let ack = AcknowledgeRequest {
+      let req = AckRequest {
         queue: task.queue,
         task_id: task.id,
         status: 0,
         message: String::new(),
       };
-      if let Err(e) = self.client.acknowledge(ack).await {
+      if let Err(e) = self.client.ack(req).await {
         println!("Ack error = {:?}", e);
       }
     }

@@ -7,7 +7,7 @@ service TasksCore {
   rpc Create(CreateRequest) returns (CreateResponse) {}
 
   // Acknowledge that a task was processed (consumer)
-  rpc Acknowledge(AcknowledgeRequest) returns (Empty) {}
+  rpc Ack(AckRequest) returns (Empty) {}
 
   // Fetch to process tasks (consumer)
   rpc Fetch(FetchRequest) returns (stream FetchResponse) {}
@@ -27,7 +27,7 @@ message CreateResponse {
 }
 
 // Acknowledge Request
-message AcknowledgeRequest {
+message AckRequest {
   string task_id = 1;
   string queue = 2;
   TaskStatus status = 3;
@@ -37,10 +37,8 @@ message AcknowledgeRequest {
 // Fetch Request
 message FetchRequest {
   string hostname = 1;
-  string kind = 2;
-  string queue = 3;
-  repeated string label = 4;
-  uint32 workers = 5;
+  string queue = 2;
+  repeated string label = 3;
 }
 
 // FetchResponse

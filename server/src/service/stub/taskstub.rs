@@ -18,7 +18,7 @@ pub struct CreateResponse {
 }
 /// Acknowledge Request
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AcknowledgeRequest {
+pub struct AckRequest {
   #[prost(string, tag = "1")]
   pub task_id: std::string::String,
   #[prost(string, tag = "2")]
@@ -34,13 +34,9 @@ pub struct FetchRequest {
   #[prost(string, tag = "1")]
   pub hostname: std::string::String,
   #[prost(string, tag = "2")]
-  pub kind: std::string::String,
-  #[prost(string, tag = "3")]
   pub queue: std::string::String,
-  #[prost(string, repeated, tag = "4")]
+  #[prost(string, repeated, tag = "3")]
   pub label: ::std::vec::Vec<std::string::String>,
-  #[prost(uint32, tag = "5")]
-  pub workers: u32,
 }
 /// FetchResponse
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -76,9 +72,9 @@ pub mod tasks_core_server {
       request: tonic::Request<super::CreateRequest>,
     ) -> Result<tonic::Response<super::CreateResponse>, tonic::Status>;
     #[doc = " Acknowledge that a task was processed (consumer)"]
-    async fn acknowledge(
+    async fn ack(
       &self,
-      request: tonic::Request<super::AcknowledgeRequest>,
+      request: tonic::Request<super::AckRequest>,
     ) -> Result<tonic::Response<super::Empty>, tonic::Status>;
     #[doc = "Server streaming response type for the Fetch method."]
     type FetchStream: Stream<Item = Result<super::FetchResponse, tonic::Status>>
@@ -151,15 +147,15 @@ pub mod tasks_core_server {
           };
           Box::pin(fut)
         }
-        "/taskstub.TasksCore/Acknowledge" => {
+        "/taskstub.TasksCore/Ack" => {
           #[allow(non_camel_case_types)]
-          struct AcknowledgeSvc<T: TasksCore>(pub Arc<T>);
-          impl<T: TasksCore> tonic::server::UnaryService<super::AcknowledgeRequest> for AcknowledgeSvc<T> {
+          struct AckSvc<T: TasksCore>(pub Arc<T>);
+          impl<T: TasksCore> tonic::server::UnaryService<super::AckRequest> for AckSvc<T> {
             type Response = super::Empty;
             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-            fn call(&mut self, request: tonic::Request<super::AcknowledgeRequest>) -> Self::Future {
+            fn call(&mut self, request: tonic::Request<super::AckRequest>) -> Self::Future {
               let inner = self.0.clone();
-              let fut = async move { (*inner).acknowledge(request).await };
+              let fut = async move { (*inner).ack(request).await };
               Box::pin(fut)
             }
           }
@@ -167,7 +163,7 @@ pub mod tasks_core_server {
           let fut = async move {
             let interceptor = inner.1.clone();
             let inner = inner.0;
-            let method = AcknowledgeSvc(inner);
+            let method = AckSvc(inner);
             let codec = tonic::codec::ProstCodec::default();
             let mut grpc = if let Some(interceptor) = interceptor {
               tonic::server::Grpc::with_interceptor(codec, interceptor)

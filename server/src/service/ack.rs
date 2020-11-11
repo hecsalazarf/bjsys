@@ -1,5 +1,5 @@
 use super::store::{MultiplexedStore, RedisStorage};
-use super::stub::tasks::{AcknowledgeRequest, TaskStatus};
+use super::stub::tasks::{AckRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
@@ -19,7 +19,7 @@ impl AckManager {
     Ok(Self { worker })
   }
 
-  pub async fn check(&self, req: AcknowledgeRequest) -> Result<(), Status> {
+  pub async fn check(&self, req: AckRequest) -> Result<(), Status> {
     self
       .worker
       .call(Acknowledge(req))
@@ -44,7 +44,7 @@ enum AckCmd {
 }
 
 #[message(result = "Result<(), Status>")]
-struct Acknowledge(AcknowledgeRequest);
+struct Acknowledge(AckRequest);
 
 struct AckWorker {
   tasks: HashMap<Arc<String>, Arc<Notify>>,
@@ -67,7 +67,7 @@ impl AckWorker {
     self.tasks.remove(&id);
   }
 
-  async fn report(&mut self, request: AcknowledgeRequest) -> Result<(), Status> {
+  async fn report(&mut self, request: AckRequest) -> Result<(), Status> {
     let status = TaskStatus::from_i32(request.status).unwrap(); // TODO: Handle None
     let res = match status {
       TaskStatus::Done => self.store.finish(&request).await,

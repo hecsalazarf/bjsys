@@ -18,7 +18,7 @@ pub struct CreateResponse {
 }
 /// Acknowledge Request
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AcknowledgeRequest {
+pub struct AckRequest {
   #[prost(string, tag = "1")]
   pub task_id: std::string::String,
   #[prost(string, tag = "2")]
@@ -34,13 +34,9 @@ pub struct FetchRequest {
   #[prost(string, tag = "1")]
   pub hostname: std::string::String,
   #[prost(string, tag = "2")]
-  pub kind: std::string::String,
-  #[prost(string, tag = "3")]
   pub queue: std::string::String,
-  #[prost(string, repeated, tag = "4")]
+  #[prost(string, repeated, tag = "3")]
   pub label: ::std::vec::Vec<std::string::String>,
-  #[prost(uint32, tag = "5")]
-  pub workers: u32,
 }
 /// FetchResponse
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -112,9 +108,9 @@ pub mod tasks_core_client {
       self.inner.unary(request.into_request(), path, codec).await
     }
     #[doc = " Acknowledge that a task was processed (consumer)"]
-    pub async fn acknowledge(
+    pub async fn ack(
       &mut self,
-      request: impl tonic::IntoRequest<super::AcknowledgeRequest>,
+      request: impl tonic::IntoRequest<super::AckRequest>,
     ) -> Result<tonic::Response<super::Empty>, tonic::Status> {
       self.inner.ready().await.map_err(|e| {
         tonic::Status::new(
@@ -123,7 +119,7 @@ pub mod tasks_core_client {
         )
       })?;
       let codec = tonic::codec::ProstCodec::default();
-      let path = http::uri::PathAndQuery::from_static("/taskstub.TasksCore/Acknowledge");
+      let path = http::uri::PathAndQuery::from_static("/taskstub.TasksCore/Ack");
       self.inner.unary(request.into_request(), path, codec).await
     }
     #[doc = " Fetch to process tasks (consumer)"]

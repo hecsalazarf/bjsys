@@ -1,4 +1,4 @@
-use super::stub::tasks::{AcknowledgeRequest, CreateRequest, FetchResponse};
+use super::stub::tasks::{AckRequest, CreateRequest, FetchResponse};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
@@ -186,7 +186,7 @@ pub trait RedisStorage: Sized + Sync {
     Ok(FetchResponse::from_map(id, values))
   }
 
-  async fn finish(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
+  async fn finish(&mut self, req: &AckRequest) -> Result<usize, StoreError> {
     let mut pipe = redis::pipe();
 
     let pending = generate_key(&req.queue, QueueSuffix::PENDING);
@@ -214,7 +214,7 @@ pub trait RedisStorage: Sized + Sync {
     Ok(1)
   }
 
-  async fn fail(&mut self, req: &AcknowledgeRequest) -> Result<usize, StoreError> {
+  async fn fail(&mut self, req: &AckRequest) -> Result<usize, StoreError> {
     let mut pipe = redis::pipe();
 
     let (deliveries, retry): (u64, u64) = pipe
