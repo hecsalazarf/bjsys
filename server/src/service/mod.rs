@@ -2,12 +2,14 @@ mod ack;
 mod dispatcher;
 mod scheduler;
 mod store;
+mod interceptor;
 pub mod stub;
 
 use stub::tasks::server::{TasksCore, TasksCoreServer};
 use stub::tasks::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, debug};
+use interceptor::RequestInterceptor;
 
 use ack::AckManager;
 use dispatcher::{MasterDispatcher, TaskStream};
@@ -49,14 +51,15 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl TasksCore for TasksService {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
-    let request = request.into_inner();
+    request.intercept()?;
+    let payload = request.into_inner();
     // TODO: Validate request data;
 
     let mut store = self.store.clone();
-    let res = if request.delay > 0 {
-      store.create_delayed_task(&request, request.delay).await
+    let res = if payload.delay > 0 {
+      store.create_delayed_task(&payload, payload.delay).await
     } else {
-      store.create_task(&request).await
+      store.create_task(&payload).await
     };
 
     res
@@ -71,6 +74,7 @@ impl TasksCore for TasksService {
   }
 
   async fn ack(&self, request: Request<AckRequest>) -> ServiceResult<Empty> {
+    request.intercept()?;
     self
       .ack_manager
       .check(request.into_inner())
@@ -80,8 +84,9 @@ impl TasksCore for TasksService {
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<FetchRequest>) -> ServiceResult<Self::FetchStream> {
-    let request = request.into_inner();
-    let queue = request.queue;
+    request.intercept()?;
+    let payload = request.into_inner();
+    let queue = payload.queue;
     let dispatcher = self.dispatcher.create(queue).await?;
 
     let tasks_stream = dispatcher.into_stream().await.expect("into_stream");

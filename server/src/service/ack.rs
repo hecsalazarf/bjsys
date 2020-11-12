@@ -68,7 +68,9 @@ impl AckWorker {
   }
 
   async fn report(&mut self, request: AckRequest) -> Result<(), Status> {
-    let status = TaskStatus::from_i32(request.status).unwrap(); // TODO: Handle None
+    // Never fails as it's previously validated
+    let status = TaskStatus::from_i32(request.status).unwrap();
+    
     let res = match status {
       TaskStatus::Done => self.store.finish(&request).await,
       TaskStatus::Failed => self.store.fail(&request).await,
