@@ -1,8 +1,8 @@
-use super::ack::{AckManager, WaitingTask};
-use super::scheduler::QueueScheduler;
-use super::store::{MultiplexedStore, RedisStorage, Store, StoreError};
-use super::stub::tasks::FetchResponse;
-use super::ServiceCmd;
+use crate::ack::{AckManager, WaitingTask};
+use crate::scheduler::QueueScheduler;
+use crate::service::ServiceCmd;
+use crate::store::{MultiplexedStore, RedisStorage, Store, StoreError};
+use crate::stub::tasks::FetchResponse;
 use core::task::Poll;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -309,10 +309,7 @@ impl QueueReader {
     let key = String::from(queue);
     let store = Store::connect().await?;
 
-    Ok(Self {
-      key,
-      store,
-    })
+    Ok(Self { key, store })
   }
 
   pub fn id(&self) -> usize {

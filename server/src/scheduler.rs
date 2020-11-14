@@ -1,5 +1,5 @@
-use super::dispatcher::{ActiveTasks, QueueDispatcher};
-use super::store::{MultiplexedStore, RedisStorage, StoreError};
+use crate::dispatcher::{ActiveTasks, QueueDispatcher};
+use crate::store::{MultiplexedStore, RedisStorage, StoreError};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};

@@ -1,4 +1,4 @@
-const OUT_DIR: &'static str = "src/service/stub/";
+const OUT_DIR: &'static str = "src/stub/";
 use proto::Proto;
 
 fn main() {

@@ -1,5 +1,5 @@
-use super::stub::tasks::{AckRequest, CreateRequest, FetchRequest};
-use super::store::TaskHash;
+use crate::store::TaskHash;
+use crate::stub::tasks::{AckRequest, CreateRequest, FetchRequest};
 use std::borrow::Cow;
 use tonic::{Code, Request, Status};
 use validator::{HasLen, ValidationError, ValidationErrors, Validator};

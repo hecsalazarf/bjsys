@@ -1,4 +1,4 @@
-use super::stub::tasks::{AckRequest, CreateRequest, FetchResponse};
+use crate::stub::tasks::{AckRequest, CreateRequest, FetchResponse};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,

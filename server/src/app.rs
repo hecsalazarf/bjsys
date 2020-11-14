@@ -1,5 +1,5 @@
-use crate::service::stub::tasks::server::TasksCoreServer;
 use crate::service::TasksService;
+use crate::stub::tasks::server::TasksCoreServer;
 use tonic::transport::{
   server::{Router, Unimplemented},
   Server,

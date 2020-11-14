@@ -1,19 +1,12 @@
-mod ack;
-mod dispatcher;
-mod scheduler;
-mod store;
-mod interceptor;
-pub mod stub;
+use crate::ack::AckManager;
+use crate::dispatcher::{MasterDispatcher, TaskStream};
+use crate::interceptor::RequestInterceptor;
+use crate::store::{MultiplexedStore, RedisStorage};
+use crate::stub::tasks::server::{TasksCore, TasksCoreServer};
+use crate::stub::tasks::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 
-use stub::tasks::server::{TasksCore, TasksCoreServer};
-use stub::tasks::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use tonic::{Request, Response, Status};
-use tracing::{error, info, debug};
-use interceptor::RequestInterceptor;
-
-use ack::AckManager;
-use dispatcher::{MasterDispatcher, TaskStream};
-use store::{MultiplexedStore, RedisStorage};
+use tracing::{debug, error, info};
 
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations

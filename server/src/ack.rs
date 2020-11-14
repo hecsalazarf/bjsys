@@ -1,11 +1,11 @@
-use super::store::{MultiplexedStore, RedisStorage};
-use super::stub::tasks::{AckRequest, TaskStatus};
+use crate::store::{MultiplexedStore, RedisStorage};
+use crate::stub::tasks::{AckRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 use tokio::sync::Notify;
 use tonic::Status;
-use tracing::{error, debug};
+use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context, Handler};
 
 #[derive(Clone)]
@@ -70,7 +70,7 @@ impl AckWorker {
   async fn report(&mut self, request: AckRequest) -> Result<(), Status> {
     // Never fails as it's previously validated
     let status = TaskStatus::from_i32(request.status).unwrap();
-    
+
     let res = match status {
       TaskStatus::Done => self.store.finish(&request).await,
       TaskStatus::Failed => self.store.fail(&request).await,

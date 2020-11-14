@@ -1,7 +1,4 @@
-mod service;
-mod app;
-
-use app::App;
+use server::app::App;
 
 #[tokio::main]
 async fn main() {
