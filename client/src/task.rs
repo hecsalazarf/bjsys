@@ -3,22 +3,16 @@ use serde::Serialize;
 
 pub use serde_json::Error as DataError;
 
-#[derive(Default)]
 pub struct Task {
   id: Option<String>,
-  kind: String,
   data: Option<String>,
   delay: u64,
   retry: u32,
 }
 
 impl Task {
-  pub fn new<T>(kind: T) -> Self
-  where
-    T: Into<String>,
-  {
+  pub fn new() -> Self {
     Self {
-      kind: kind.into(),
       ..Self::default()
     }
   }
@@ -33,10 +27,6 @@ impl Task {
 
   pub fn id(&self) -> Option<&String> {
     self.id.as_ref()
-  }
-
-  pub fn kind(&self) -> &str {
-    self.kind.as_ref()
   }
 
   pub fn data(&self) -> Option<&String> {
@@ -56,6 +46,17 @@ impl Task {
   }
 }
 
+impl Default for Task {
+  fn default() -> Self {
+    Self {
+      id: None,
+      data: None,
+      delay: 0,
+      retry: 1,
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -68,7 +69,7 @@ mod tests {
 
   #[test]
   fn task_creation() {
-    let mut task = Task::new("foo");
+    let mut task = Task::new();
     let struct_data = FooData {
       number: 5,
       string: String::from("bar"),
@@ -78,7 +79,6 @@ mod tests {
     let res_data = task.add_data(&struct_data);
 
     assert_eq!(task.id(), None, "ID mismatch");
-    assert_eq!(task.kind(), "foo", "Kind mismatch");
     assert!(res_data.is_ok(), "Data could not be added");
     assert_eq!(
       task.data().unwrap(),

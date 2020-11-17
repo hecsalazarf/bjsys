@@ -9,7 +9,7 @@ struct FooData {
 }
 
 async fn create_queue() -> Result<Queue, ChannelError> {
-  Queue::configure().with_name("test-queue").connect().await
+  Queue::configure().with_name("myqueue").connect().await
 }
 
 #[tokio::test]
@@ -24,11 +24,14 @@ async fn add_task() {
     number: 4,
     string: String::from("hello queue")
   };
-  let mut task = Task::new("foo");
+  let mut task = Task::new();
   let _d = task.add_data(&data);
   let mut queue = create_queue().await.unwrap();
 
   let res = queue.add(task).await;
+  if let Err(ref e) = res {
+    println!("ERROR: {:?}", e);
+  }
   assert!(res.is_ok());
   println!("Task id: {}", res.unwrap());
 }
