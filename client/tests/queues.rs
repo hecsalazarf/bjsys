@@ -22,7 +22,7 @@ async fn queue_connect() {
 async fn add_task() {
   let data = FooData {
     number: 4,
-    string: String::from("hello queue")
+    string: String::from("hello queue"),
   };
   let mut task = Task::new();
   let _d = task.add_data(&data);

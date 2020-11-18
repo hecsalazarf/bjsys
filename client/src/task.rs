@@ -12,9 +12,7 @@ pub struct Task {
 
 impl Task {
   pub fn new() -> Self {
-    Self {
-      ..Self::default()
-    }
+    Self { ..Self::default() }
   }
 
   pub fn add_data<T>(&mut self, data: &T) -> Result<(), DataError>

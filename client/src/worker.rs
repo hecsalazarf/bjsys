@@ -1,5 +1,5 @@
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
-use crate::taskstub::{AckRequest, FetchRequest};
+use crate::taskstub::{AckRequest, FetchRequest, TaskStatus};
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context, Handler};
@@ -98,18 +98,37 @@ impl<P: Processor> WorkerProcessor<P> {
       .await
       .unwrap()
       .into_inner();
+
     while let Some(task) = stream.message().await.unwrap() {
-      if let Err(e) = self.processor.process(&task).await {
-        println!("Process error = {:?}", e);
-        // TODO: Send ack with error
+      let mut status = TaskStatus::Done;
+      let mut message = String::new();
+
+      match self.processor.process(&task).await {
+        Err(e) => {
+          println!("Process error = {:?}", e);
+
+          let (s, m) = match e {
+            ProcessError::Failed(m) => (TaskStatus::Failed, m),
+            ProcessError::Canceled(m) => (TaskStatus::Canceled, m),
+          };
+
+          status = s;
+          message = m;
+        }
+        Ok(Some(m)) => {
+          message = m;
+        }
+        _ => {}
       }
+
       let req = AckRequest {
         queue: task.queue,
         task_id: task.id,
-        status: 0,
-        message: String::new(),
+        status: status.into(),
+        message,
       };
       if let Err(e) = self.client.ack(req).await {
+        // TODO: Handle error
         println!("Ack error = {:?}", e);
       }
     }
@@ -129,11 +148,21 @@ impl<P: Processor> Handler<WorkerCmd> for WorkerProcessor<P> {
 
 #[derive(Debug)]
 pub enum ProcessError {
-  Failed,
-  Canceled,
+  Failed(String),
+  Canceled(String),
+}
+
+impl ProcessError {
+  pub fn failed<M: Into<String>>(message: M) -> Self {
+    Self::Failed(message.into())
+  }
+
+  pub fn canceled<M: Into<String>>(message: M) -> Self {
+    Self::Canceled(message.into())
+  }
 }
 
 #[tonic::async_trait]
 pub trait Processor: Sized + Send + 'static {
-  async fn process(&mut self, task: &FetchResponse) -> Result<(), ProcessError>;
+  async fn process(&mut self, task: &FetchResponse) -> Result<Option<String>, ProcessError>;
 }
