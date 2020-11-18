@@ -100,8 +100,14 @@ impl ValidatePayload for AckRequest {
     if let Err(e) = validate_length(Defaults::STRING_LEN, &self.queue) {
       errors.add(TaskHash::QUEUE, e);
     }
-    // Message length
-    if let Err(e) = validate_length(Defaults::STRING_LEN, &self.message) {
+
+    // Message is optional, so there is no minimum length
+    let validator = Validator::Length {
+      min: None,
+      max: Some(1024),
+      equal: None,
+    };
+    if let Err(e) = validate_length(validator, &self.message) {
       errors.add(TaskHash::MESSAGE, e);
     }
     // Status is always valid. Value is converted to 0 if it exceeds the range
