@@ -55,7 +55,7 @@ impl<P: Processor> WorkerBuilder<P> {
       client: Client::new(channel),
       processor,
     };
-    let addr = worker.start().await.expect("start_worker");
+    let addr = worker.start().await.expect("start worker");
     Ok(Worker { addr })
   }
 }
@@ -74,14 +74,14 @@ impl<P: Processor> Worker<P> {
     }
   }
 
-  pub async fn run(&self) {
-    self.addr.call(WorkerCmd::Run).await.expect("fetch");
+  pub async fn run(&self) -> Result<(), ChannelStatus> {
+    self.addr.call(WorkerCmd::Fetch).await.expect("fetch tasks")
   }
 }
 
-#[message]
+#[message(result = "Result<(), ChannelStatus>")]
 enum WorkerCmd {
-  Run,
+  Fetch,
 }
 
 struct WorkerProcessor<P: Processor> {
@@ -91,22 +91,15 @@ struct WorkerProcessor<P: Processor> {
 }
 
 impl<P: Processor> WorkerProcessor<P> {
-  async fn fetch(&mut self) {
-    let mut stream = self
-      .client
-      .fetch(self.consumer.clone())
-      .await
-      .unwrap()
-      .into_inner();
+  async fn fetch(&mut self) -> Result<(), ChannelStatus> {
+    let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
 
-    while let Some(task) = stream.message().await.unwrap() {
+    while let Some(task) = stream.message().await? {
       let mut status = TaskStatus::Done;
       let mut message = String::new();
 
       match self.processor.process(&task).await {
         Err(e) => {
-          println!("Process error = {:?}", e);
-
           let (s, m) = match e {
             ProcessError::Failed(m) => (TaskStatus::Failed, m),
             ProcessError::Canceled(m) => (TaskStatus::Canceled, m),
@@ -127,11 +120,10 @@ impl<P: Processor> WorkerProcessor<P> {
         status: status.into(),
         message,
       };
-      if let Err(e) = self.client.ack(req).await {
-        // TODO: Handle error
-        println!("Ack error = {:?}", e);
-      }
+      self.client.ack(req).await?;
     }
+
+    Ok(())
   }
 }
 
@@ -139,9 +131,13 @@ impl<P: Processor> Actor for WorkerProcessor<P> {}
 
 #[tonic::async_trait]
 impl<P: Processor> Handler<WorkerCmd> for WorkerProcessor<P> {
-  async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: WorkerCmd) {
+  async fn handle(
+    &mut self,
+    _ctx: &mut Context<Self>,
+    cmd: WorkerCmd,
+  ) -> Result<(), ChannelStatus> {
     match cmd {
-      WorkerCmd::Run => self.fetch().await,
+      WorkerCmd::Fetch => self.fetch().await,
     }
   }
 }

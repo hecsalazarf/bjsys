@@ -22,6 +22,10 @@ impl Processor for TestProcessor {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  // Enable tracing
+  tracing_subscriber::fmt().init();
+  
+  // Wait for incoming tasks
   let handler = tokio::spawn(async {
     let processor = TestProcessor;
     let worker = Worker::new(processor)
@@ -29,7 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .connect()
       .await
       .unwrap();
-    worker.run().await;
+    if let Err(e) = worker.run().await {
+      tracing::error!("Error while processing: {}", e);
+    }
   });
 
 
@@ -41,14 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Immediate executed task
   let task = Task::with_data(&data)?;
   let id = queue.add(task).await?;
-  println!("Created task {}", id);
+  tracing::info!("Created task {}", id);
 
   // Delayed task for 5 secs
   data.text = String::from("Delayed task");
   let mut task = Task::with_data(&data)?;
   task.delay(Duration::from_secs(5));
   let id = queue.add(task).await?;
-  println!("Created delayed task {}", id);
+  tracing::info!("Created delayed task {}", id);
 
   handler.await?;
 
