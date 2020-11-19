@@ -1,5 +1,6 @@
-use client::queue::{ChannelError, Queue};
-use client::task::Task;
+use client::queue::Queue;
+use client::task::Builder;
+use client::ChannelError;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -24,7 +25,7 @@ async fn add_task() {
     number: 4,
     string: String::from("hello queue"),
   };
-  let task = Task::with_data(&data).unwrap();
+  let task = Builder::new(&data);
   let mut queue = create_queue().await.unwrap();
 
   let res = queue.add(task).await;

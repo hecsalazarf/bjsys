@@ -1,10 +1,10 @@
-use crate::task::Task;
+use crate::task::Builder;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
+use crate::{ChannelError, ChannelStatus};
+use serde::Serialize;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
-
-pub use tonic::transport::Error as ChannelError;
-pub use tonic::{Request, Status as ChannelStatus};
+use tonic::Request;
 
 #[derive(Debug)]
 pub struct QueueBuilder {
@@ -52,17 +52,22 @@ impl Queue {
     QueueBuilder::default()
   }
 
-  pub async fn add(&mut self, task: Task) -> Result<String, ChannelStatus> {
-    let request = task.into_stub(&self.name);
+  pub async fn add<T>(&mut self, task: Builder<T>) -> Result<String, ChannelStatus>
+  where
+    T: Serialize,
+  {
+    let request = task.into_request(&self.name).map_err(|e| {
+      let error = format!("Cannot serialize data: {}", e);
+      ChannelStatus::invalid_argument(error)
+    })?;
 
-    Ok(
-      self
-        .client
-        .create(Request::new(request))
-        .await?
-        .into_inner()
-        .task_id,
-    )
+    let response = self
+      .client
+      .create(Request::new(request))
+      .await?
+      .into_inner();
+
+    Ok(response.task_id)
   }
 }
 

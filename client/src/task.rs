@@ -1,28 +1,23 @@
-pub use crate::taskstub::CreateRequest;
+use crate::taskstub::CreateRequest;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::time::Duration;
 
 pub use serde_json::Error as DataError;
 
-pub struct Task {
-  id: Option<String>,
-  data: Option<String>,
+pub struct Builder<T: Serialize> {
+  data: T,
   delay: u64,
   retry: u32,
 }
 
-impl Task {
-  pub fn new() -> Self {
-    Self { ..Self::default() }
-  }
-
-  pub fn with_data<T>(data: &T) -> Result<Self, DataError>
-  where
-    T: Serialize + ?Sized,
-  {
-    let mut task = Self::new();
-    task.data = Some(serde_json::to_string(data)?);
-    Ok(task)
+impl<T: Serialize> Builder<T> {
+  pub fn new(data: T) -> Self {
+    Self {
+      data,
+      delay: 0,
+      retry: 25, // Default is 25 retries
+    }
   }
 
   pub fn delay(&mut self, delay: Duration) -> &mut Self {
@@ -35,72 +30,68 @@ impl Task {
     self
   }
 
-  pub fn id(&self) -> Option<&String> {
-    self.id.as_ref()
-  }
-
-  pub fn data(&self) -> Option<&String> {
-    self.data.as_ref()
-  }
-
-  pub(crate) fn into_stub<T>(self, queue: T) -> CreateRequest
+  pub(crate) fn into_request<S>(self, queue: S) -> Result<CreateRequest, DataError>
   where
-    T: Into<String>,
+    S: Into<String>,
   {
-    CreateRequest {
-      data: self.data.unwrap_or_else(String::new),
+    let request = CreateRequest {
+      data: serde_json::to_string(&self.data)?,
       queue: queue.into(),
       delay: self.delay,
       retry: self.retry,
-    }
+    };
+
+    Ok(request)
   }
 }
 
-impl Default for Task {
-  fn default() -> Self {
-    Self {
-      id: None,
-      data: None,
-      delay: 0,
-      retry: 1,
-    }
+pub struct Task<T: DeserializeOwned> {
+  id: String,
+  queue: String,
+  data: T,
+}
+
+impl<T: DeserializeOwned> Task<T> {
+  pub fn id(&self) -> &str {
+    self.id.as_ref()
+  }
+
+  pub fn queue(&self) -> &str {
+    self.queue.as_ref()
+  }
+
+  pub fn into_inner(self) -> T {
+    self.data
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde::Deserialize;
 
-  #[derive(Serialize)]
+  #[derive(Serialize, Debug, Deserialize, PartialEq)]
   struct FooData {
     number: u32,
     string: String,
   }
 
   #[test]
-  fn empty_task() {
-    let task = Task::new();
-    assert_eq!(task.id(), None, "ID mismatch");
-    assert_eq!(task.data(), None, "Non-empty data");
+  fn default_builder() {
+    let task = Builder::new(());
+    assert_eq!(task.data, (), "Non-empty data");
+    assert_eq!(task.delay, 0);
+    assert_eq!(task.retry, 25);
   }
 
   #[test]
-  fn data_task() {
+  fn data_builder() {
     let struct_data = FooData {
       number: 5,
-      string: String::from("bar"),
+      string: "bar".into(),
     };
 
-    let ser_data = "{\"number\":5,\"string\":\"bar\"}";
-    let res = Task::with_data(&struct_data);
-    assert!(res.is_ok(), "Data could not be added");
-
-    let task = res.unwrap();
-    assert_eq!(task.id(), None, "ID mismatch");
-    assert_eq!(
-      task.data().unwrap(),
-      &String::from(ser_data),
-      "Wrong serialization"
-    );
+    let task = Builder::new(&struct_data);
+    assert_eq!(task.data, &struct_data);
   }
 }
