@@ -24,8 +24,7 @@ async fn add_task() {
     number: 4,
     string: String::from("hello queue"),
   };
-  let mut task = Task::new();
-  let _d = task.add_data(&data);
+  let task = Task::with_data(&data).unwrap();
   let mut queue = create_queue().await.unwrap();
 
   let res = queue.add(task).await;
