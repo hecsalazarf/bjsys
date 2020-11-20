@@ -1,4 +1,4 @@
-use crate::taskstub::CreateRequest;
+use crate::taskstub::{CreateRequest, FetchResponse};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::time::Duration;
@@ -45,6 +45,7 @@ impl<T: Serialize> Builder<T> {
   }
 }
 
+#[derive(Debug)]
 pub struct Task<T: DeserializeOwned> {
   id: String,
   queue: String,
@@ -62,6 +63,18 @@ impl<T: DeserializeOwned> Task<T> {
 
   pub fn into_inner(self) -> T {
     self.data
+  }
+
+  pub(crate) fn from_response(response: FetchResponse) -> Result<Self, DataError> {
+    let data = serde_json::from_str(&response.data)?;
+
+    let task = Self {
+      id: response.id,
+      queue: response.queue,
+      data,
+    };
+
+    Ok(task)
   }
 }
 

@@ -1,23 +1,30 @@
+use crate::task::Task;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
 use crate::taskstub::{AckRequest, FetchRequest, TaskStatus};
+use crate::{ChannelError, ChannelStatus};
+use serde::de::DeserializeOwned;
+use std::marker::PhantomData;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context, Handler};
 
-pub use tonic::transport::Error as ChannelError;
-pub use tonic::{Request, Status as ChannelStatus};
-
-// TODO: Transform fetch response into Task. Do not expose FetchTesponse
-pub use crate::taskstub::FetchResponse;
-
 #[derive(Debug)]
-pub struct WorkerBuilder<P: Processor> {
+pub struct WorkerBuilder<T, P>
+where
+  T: DeserializeOwned,
+  P: Processor<T>,
+{
   consumer: FetchRequest,
   endpoint: Endpoint,
   processor: Option<P>,
+  task_inner: PhantomData<T>,
 }
 
-impl<P: Processor> Default for WorkerBuilder<P> {
+impl<T, P> Default for WorkerBuilder<T, P>
+where
+  T: DeserializeOwned,
+  P: Processor<T>,
+{
   fn default() -> Self {
     let endpoint = Endpoint::from_static("http://localhost:11000");
     let consumer = FetchRequest {
@@ -30,22 +37,27 @@ impl<P: Processor> Default for WorkerBuilder<P> {
       endpoint,
       consumer,
       processor: None,
+      task_inner: PhantomData,
     }
   }
 }
 
-impl<P: Processor> WorkerBuilder<P> {
-  pub fn for_queue<T: Into<String>>(mut self, name: T) -> Self {
+impl<T, P> WorkerBuilder<T, P>
+where
+  T: DeserializeOwned + Send + 'static,
+  P: Processor<T>,
+{
+  pub fn for_queue<S: Into<String>>(mut self, name: S) -> Self {
     self.consumer.queue = name.into();
     self
   }
 
-  pub fn endpoint<T: Into<Uri>>(mut self, uri: T) -> Self {
+  pub fn endpoint<U: Into<Uri>>(mut self, uri: U) -> Self {
     self.endpoint = Endpoint::from(uri.into());
     self
   }
 
-  pub async fn connect(self) -> Result<Worker<P>, ChannelError> {
+  pub async fn connect(self) -> Result<Worker<T, P>, ChannelError> {
     let channel = self.endpoint.connect().await?;
     let consumer = self.consumer;
     let processor = self.processor.unwrap();
@@ -54,24 +66,35 @@ impl<P: Processor> WorkerBuilder<P> {
       consumer,
       client: Client::new(channel),
       processor,
+      task_inner: PhantomData,
     };
     let addr = worker.start().await.expect("start worker");
     Ok(Worker { addr })
   }
 }
 
-pub struct Worker<P: Processor> {
-  addr: Addr<WorkerProcessor<P>>,
+pub struct Worker<T, P>
+where
+  T: DeserializeOwned + Send + 'static,
+  P: Processor<T>,
+{
+  addr: Addr<WorkerProcessor<T, P>>,
 }
 
-impl<P: Processor> Worker<P> {
-  pub fn new(processor: P) -> WorkerBuilder<P> {
+impl<T, P> Worker<T, P>
+where
+  T: DeserializeOwned + Send,
+  P: Processor<T>,
+{
+  pub fn builder(processor: P) -> WorkerBuilder<T, P> {
     let processor = Some(processor);
 
-    WorkerBuilder {
+    let worker = WorkerBuilder {
       processor,
       ..WorkerBuilder::default()
-    }
+    };
+
+    worker
   }
 
   pub async fn run(&self) -> Result<(), ChannelStatus> {
@@ -84,21 +107,36 @@ enum WorkerCmd {
   Fetch,
 }
 
-struct WorkerProcessor<P: Processor> {
+struct WorkerProcessor<T, P>
+where
+  T: DeserializeOwned + Send + 'static,
+  P: Processor<T>,
+{
   consumer: FetchRequest,
   client: Client<Channel>,
   processor: P,
+  task_inner: PhantomData<T>,
 }
 
-impl<P: Processor> WorkerProcessor<P> {
+impl<T, P> WorkerProcessor<T, P>
+where
+  T: DeserializeOwned + Send,
+  P: Processor<T>,
+{
   async fn fetch(&mut self) -> Result<(), ChannelStatus> {
     let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
 
-    while let Some(task) = stream.message().await? {
+    while let Some(response) = stream.message().await? {
       let mut status = TaskStatus::Done;
       let mut message = String::new();
+      let id = response.id.clone();
+      let queue = response.queue.clone();
 
-      match self.processor.process(&task).await {
+      let task = Task::from_response(response).map_err(|e| {
+        let error = format!("Cannot serialize data: {}", e);
+        ChannelStatus::invalid_argument(error)
+      })?;
+      match self.processor.process(task).await {
         Err(e) => {
           let (s, m) = match e {
             ProcessError::Failed(m) => (TaskStatus::Failed, m),
@@ -115,8 +153,8 @@ impl<P: Processor> WorkerProcessor<P> {
       }
 
       let req = AckRequest {
-        queue: task.queue,
-        task_id: task.id,
+        queue,
+        task_id: id,
         status: status.into(),
         message,
       };
@@ -127,10 +165,19 @@ impl<P: Processor> WorkerProcessor<P> {
   }
 }
 
-impl<P: Processor> Actor for WorkerProcessor<P> {}
+impl<T, P> Actor for WorkerProcessor<T, P>
+where
+  T: DeserializeOwned + Send,
+  P: Processor<T>,
+{
+}
 
 #[tonic::async_trait]
-impl<P: Processor> Handler<WorkerCmd> for WorkerProcessor<P> {
+impl<T, P> Handler<WorkerCmd> for WorkerProcessor<T, P>
+where
+  T: DeserializeOwned + Send,
+  P: Processor<T>,
+{
   async fn handle(
     &mut self,
     _ctx: &mut Context<Self>,
@@ -159,6 +206,6 @@ impl ProcessError {
 }
 
 #[tonic::async_trait]
-pub trait Processor: Sized + Send + 'static {
-  async fn process(&mut self, task: &FetchResponse) -> Result<Option<String>, ProcessError>;
+pub trait Processor<T: DeserializeOwned>: Sized + Send + 'static {
+  async fn process(&mut self, task: Task<T>) -> Result<Option<String>, ProcessError>;
 }

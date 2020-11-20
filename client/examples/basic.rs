@@ -1,21 +1,21 @@
 use client::queue::Queue;
-use client::task::Builder;
-use client::worker::{FetchResponse, ProcessError, Processor, Worker};
-use serde::Serialize;
+use client::task::{Builder, Task};
+use client::worker::{ProcessError, Processor, Worker};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Serialize)]
-struct FooData {
-  number: u32,
-  text: String,
+#[derive(Serialize, Deserialize, Debug)]
+struct Car {
+  doors: u32,
+  make: String,
 }
 
 struct TestProcessor;
 
 #[tonic::async_trait]
-impl Processor for TestProcessor {
-  async fn process(&mut self, task: &FetchResponse) -> Result<Option<String>, ProcessError> {
-    println!("Processing task: {:?}", task);
+impl Processor<Car> for TestProcessor {
+  async fn process(&mut self, task: Task<Car>) -> Result<Option<String>, ProcessError> {
+    tracing::info!("Processing: {:?}", task);
     Ok(Some("Task was processed".into()))
   }
 }
@@ -26,34 +26,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::fmt().init();
 
   // Wait for incoming tasks
-  let handler = tokio::spawn(async {
-    let processor = TestProcessor;
-    let worker = Worker::new(processor)
-      .for_queue("myqueue")
-      .connect()
-      .await
-      .unwrap();
+  let processor = TestProcessor;
+  let worker = Worker::builder(processor)
+    .for_queue("myqueue")
+    .connect()
+    .await
+    .unwrap();
+  let handler = tokio::spawn(async move {
     if let Err(e) = worker.run().await {
       tracing::error!("Error while processing: {}", e);
     }
   });
 
   let mut queue = Queue::configure().with_name("myqueue").connect().await?;
-  let mut data = FooData {
-    number: 4,
-    text: String::from("Immediate task"),
+  let mut data = Car {
+    doors: 4,
+    make: String::from("Renault"),
   };
   // Immediate executed task
   let task = Builder::new(&data);
   let id = queue.add(task).await?;
-  tracing::info!("Created task {}", id);
+  tracing::info!("Task {} created", id);
 
   // Delayed task for 5 secs
-  data.text = String::from("Delayed task");
+  data.make = String::from("Nissan");
   let mut task = Builder::new(&data);
   task.delay(Duration::from_secs(5));
   let id = queue.add(task).await?;
-  tracing::info!("Created delayed task {}", id);
+  tracing::info!("Delayed task {} created", id);
 
   handler.await?;
 
