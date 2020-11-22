@@ -1,7 +1,7 @@
+use crate::error::Error;
 use crate::task::Task;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
 use crate::taskstub::{AckRequest, FetchRequest, TaskStatus};
-use crate::{ChannelError, ChannelStatus};
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use tonic::transport::channel::Channel;
@@ -57,7 +57,7 @@ where
     self
   }
 
-  pub async fn connect(self) -> Result<Worker<T, P>, ChannelError> {
+  pub async fn connect(self) -> Result<Worker<T, P>, Error> {
     let channel = self.endpoint.connect().await?;
     let consumer = self.consumer;
     let processor = self.processor.unwrap();
@@ -97,12 +97,12 @@ where
     worker
   }
 
-  pub async fn run(&self) -> Result<(), ChannelStatus> {
+  pub async fn run(&self) -> Result<(), Error> {
     self.addr.call(WorkerCmd::Fetch).await.expect("fetch tasks")
   }
 }
 
-#[message(result = "Result<(), ChannelStatus>")]
+#[message(result = "Result<(), Error>")]
 enum WorkerCmd {
   Fetch,
 }
@@ -123,7 +123,7 @@ where
   T: DeserializeOwned + Send,
   P: Processor<T>,
 {
-  async fn fetch(&mut self) -> Result<(), ChannelStatus> {
+  async fn fetch(&mut self) -> Result<(), Error> {
     let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
 
     while let Some(response) = stream.message().await? {
@@ -132,10 +132,7 @@ where
       let id = response.id.clone();
       let queue = response.queue.clone();
 
-      let task = Task::from_response(response).map_err(|e| {
-        let error = format!("Cannot serialize data: {}", e);
-        ChannelStatus::invalid_argument(error)
-      })?;
+      let task = Task::from_response(response)?;
       match self.processor.process(task).await {
         Err(e) => {
           let (s, m) = match e {
@@ -178,11 +175,7 @@ where
   T: DeserializeOwned + Send,
   P: Processor<T>,
 {
-  async fn handle(
-    &mut self,
-    _ctx: &mut Context<Self>,
-    cmd: WorkerCmd,
-  ) -> Result<(), ChannelStatus> {
+  async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: WorkerCmd) -> Result<(), Error> {
     match cmd {
       WorkerCmd::Fetch => self.fetch().await,
     }

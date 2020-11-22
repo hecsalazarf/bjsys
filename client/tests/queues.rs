@@ -1,6 +1,6 @@
+use client::error::Error;
 use client::queue::Queue;
 use client::task::Builder;
-use client::ChannelError;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -9,7 +9,7 @@ struct FooData {
   string: String,
 }
 
-async fn create_queue() -> Result<Queue, ChannelError> {
+async fn create_queue() -> Result<Queue, Error> {
   Queue::configure().with_name("myqueue").connect().await
 }
 

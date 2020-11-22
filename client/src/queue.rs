@@ -1,6 +1,6 @@
+use crate::error::Error;
 use crate::task::Builder;
 use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
-use crate::{ChannelError, ChannelStatus};
 use serde::Serialize;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
@@ -32,7 +32,7 @@ impl QueueBuilder {
     self
   }
 
-  pub async fn connect(self) -> Result<Queue, ChannelError> {
+  pub async fn connect(self) -> Result<Queue, Error> {
     let channel = self.endpoint.connect().await?;
     Ok(Queue {
       name: self.name,
@@ -52,14 +52,11 @@ impl Queue {
     QueueBuilder::default()
   }
 
-  pub async fn add<T>(&mut self, task: Builder<T>) -> Result<String, ChannelStatus>
+  pub async fn add<T>(&mut self, task: Builder<T>) -> Result<String, Error>
   where
     T: Serialize,
   {
-    let request = task.into_request(&self.name).map_err(|e| {
-      let error = format!("Cannot serialize data: {}", e);
-      ChannelStatus::invalid_argument(error)
-    })?;
+    let request = task.into_request(&self.name)?;
 
     let response = self
       .client
