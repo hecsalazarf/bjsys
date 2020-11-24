@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::task::Task;
-use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
-use crate::taskstub::{AckRequest, FetchRequest, TaskStatus};
+use proto::client::TasksCoreClient as Client;
+use proto::{AckRequest, FetchRequest, TaskStatus};
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use tonic::transport::channel::Channel;

@@ -1,5 +1,4 @@
-use crate::store::TaskHash;
-use crate::stub::tasks::{AckRequest, CreateRequest, FetchRequest};
+use proto::{AckRequest, CreateRequest, FetchRequest, TaskHash};
 use std::borrow::Cow;
 use tonic::{Code, Request, Status};
 use validator::{HasLen, ValidationError, ValidationErrors, Validator};

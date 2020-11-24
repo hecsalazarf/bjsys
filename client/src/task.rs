@@ -1,4 +1,4 @@
-use crate::taskstub::{CreateRequest, FetchResponse};
+use proto::{CreateRequest, FetchResponse};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::time::Duration;

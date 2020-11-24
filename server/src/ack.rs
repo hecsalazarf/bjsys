@@ -1,5 +1,5 @@
 use crate::store::{MultiplexedStore, RedisStorage};
-use crate::stub::tasks::{AckRequest, TaskStatus};
+use proto::{AckRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};

@@ -1,4 +1,4 @@
-use crate::stub::tasks::{AckRequest, CreateRequest, FetchResponse};
+use proto::{AckRequest, CreateRequest, FetchResponse, TaskHash};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
   AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
@@ -16,20 +16,6 @@ impl QueueSuffix {
   const DELAYED: &'static str = "delayed";
   const DONE: &'static str = "done";
   const WAITING: &'static str = "waiting";
-}
-
-pub struct TaskHash;
-
-impl TaskHash {
-  pub const ID: &'static str = "id";
-  pub const DATA: &'static str = "data";
-  pub const QUEUE: &'static str = "queue";
-  pub const RETRY: &'static str = "retry";
-  pub const DELIVERIES: &'static str = "deliveries";
-  pub const STATUS: &'static str = "status";
-  pub const MESSAGE: &'static str = "message";
-  pub const PROCESSED_ON: &'static str = "processed_on";
-  pub const FINISHED_ON: &'static str = "finished_on";
 }
 
 #[tonic::async_trait]
@@ -361,15 +347,6 @@ impl RedisStorage for MultiplexedStore {
 
   fn script(&self) -> &'static ScriptStore {
     self.script
-  }
-}
-
-impl FetchResponse {
-  fn from_map(id: String, mut values: HashMap<String, String>) -> Self {
-    let data = values.remove(TaskHash::DATA).unwrap_or_default();
-    let queue = values.remove(TaskHash::QUEUE).unwrap_or_default();
-
-    FetchResponse { id, queue, data }
   }
 }
 

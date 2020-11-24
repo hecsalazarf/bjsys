@@ -1,63 +1,100 @@
-/// Create Request
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CreateRequest {
-  #[prost(string, tag = "1")]
-  pub queue: std::string::String,
-  #[prost(string, tag = "2")]
-  pub data: std::string::String,
-  #[prost(uint32, tag = "3")]
-  pub retry: u32,
-  #[prost(uint64, tag = "4")]
-  pub delay: u64,
-}
-/// Create Response
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CreateResponse {
-  #[prost(string, tag = "1")]
-  pub task_id: std::string::String,
-}
-/// Acknowledge Request
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AckRequest {
-  #[prost(string, tag = "1")]
-  pub task_id: std::string::String,
-  #[prost(string, tag = "2")]
-  pub queue: std::string::String,
-  #[prost(enumeration = "TaskStatus", tag = "3")]
-  pub status: i32,
-  #[prost(string, tag = "4")]
-  pub message: std::string::String,
-}
-/// Fetch Request
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FetchRequest {
-  #[prost(string, tag = "1")]
-  pub hostname: std::string::String,
-  #[prost(string, tag = "2")]
-  pub queue: std::string::String,
-  #[prost(string, repeated, tag = "3")]
-  pub label: ::std::vec::Vec<std::string::String>,
-}
-/// FetchResponse
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FetchResponse {
-  #[prost(string, tag = "1")]
-  pub id: std::string::String,
-  #[prost(string, tag = "2")]
-  pub queue: std::string::String,
-  #[prost(string, tag = "3")]
-  pub data: std::string::String,
-}
-/// Empty response
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Empty {}
-/// Task status
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum TaskStatus {
-  Done = 0,
-  Failed = 1,
-  Canceled = 2,
+#[doc = r" Generated client implementations."]
+pub mod tasks_core_client {
+  #![allow(unused_variables, dead_code, missing_docs)]
+  use tonic::codegen::*;
+  pub struct TasksCoreClient<T> {
+    inner: tonic::client::Grpc<T>,
+  }
+  impl TasksCoreClient<tonic::transport::Channel> {
+    #[doc = r" Attempt to create a new client by connecting to a given endpoint."]
+    pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+    where
+      D: std::convert::TryInto<tonic::transport::Endpoint>,
+      D::Error: Into<StdError>,
+    {
+      let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+      Ok(Self::new(conn))
+    }
+  }
+  impl<T> TasksCoreClient<T>
+  where
+    T: tonic::client::GrpcService<tonic::body::BoxBody>,
+    T::ResponseBody: Body + HttpBody + Send + 'static,
+    T::Error: Into<StdError>,
+    <T::ResponseBody as HttpBody>::Error: Into<StdError> + Send,
+  {
+    pub fn new(inner: T) -> Self {
+      let inner = tonic::client::Grpc::new(inner);
+      Self { inner }
+    }
+    pub fn with_interceptor(inner: T, interceptor: impl Into<tonic::Interceptor>) -> Self {
+      let inner = tonic::client::Grpc::with_interceptor(inner, interceptor);
+      Self { inner }
+    }
+    #[doc = " Create a new task (producer)"]
+    pub async fn create(
+      &mut self,
+      request: impl tonic::IntoRequest<super::super::msg::CreateRequest>,
+    ) -> Result<tonic::Response<super::super::msg::CreateResponse>, tonic::Status> {
+      self.inner.ready().await.map_err(|e| {
+        tonic::Status::new(
+          tonic::Code::Unknown,
+          format!("Service was not ready: {}", e.into()),
+        )
+      })?;
+      let codec = tonic::codec::ProstCodec::default();
+      let path = http::uri::PathAndQuery::from_static("/service.TasksCore/Create");
+      self.inner.unary(request.into_request(), path, codec).await
+    }
+    #[doc = " Acknowledge that a task was processed (consumer)"]
+    pub async fn ack(
+      &mut self,
+      request: impl tonic::IntoRequest<super::super::msg::AckRequest>,
+    ) -> Result<tonic::Response<super::super::msg::Empty>, tonic::Status> {
+      self.inner.ready().await.map_err(|e| {
+        tonic::Status::new(
+          tonic::Code::Unknown,
+          format!("Service was not ready: {}", e.into()),
+        )
+      })?;
+      let codec = tonic::codec::ProstCodec::default();
+      let path = http::uri::PathAndQuery::from_static("/service.TasksCore/Ack");
+      self.inner.unary(request.into_request(), path, codec).await
+    }
+    #[doc = " Fetch to process tasks (consumer)"]
+    pub async fn fetch(
+      &mut self,
+      request: impl tonic::IntoRequest<super::super::msg::FetchRequest>,
+    ) -> Result<
+      tonic::Response<tonic::codec::Streaming<super::super::msg::FetchResponse>>,
+      tonic::Status,
+    > {
+      self.inner.ready().await.map_err(|e| {
+        tonic::Status::new(
+          tonic::Code::Unknown,
+          format!("Service was not ready: {}", e.into()),
+        )
+      })?;
+      let codec = tonic::codec::ProstCodec::default();
+      let path = http::uri::PathAndQuery::from_static("/service.TasksCore/Fetch");
+      self
+        .inner
+        .server_streaming(request.into_request(), path, codec)
+        .await
+    }
+  }
+  impl<T: Clone> Clone for TasksCoreClient<T> {
+    fn clone(&self) -> Self {
+      Self {
+        inner: self.inner.clone(),
+      }
+    }
+  }
+  impl<T> std::fmt::Debug for TasksCoreClient<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      write!(f, "TasksCoreClient {{ ... }}")
+    }
+  }
 }
 #[doc = r" Generated server implementations."]
 pub mod tasks_core_server {
@@ -69,22 +106,22 @@ pub mod tasks_core_server {
     #[doc = " Create a new task (producer)"]
     async fn create(
       &self,
-      request: tonic::Request<super::CreateRequest>,
-    ) -> Result<tonic::Response<super::CreateResponse>, tonic::Status>;
+      request: tonic::Request<super::super::msg::CreateRequest>,
+    ) -> Result<tonic::Response<super::super::msg::CreateResponse>, tonic::Status>;
     #[doc = " Acknowledge that a task was processed (consumer)"]
     async fn ack(
       &self,
-      request: tonic::Request<super::AckRequest>,
-    ) -> Result<tonic::Response<super::Empty>, tonic::Status>;
+      request: tonic::Request<super::super::msg::AckRequest>,
+    ) -> Result<tonic::Response<super::super::msg::Empty>, tonic::Status>;
     #[doc = "Server streaming response type for the Fetch method."]
-    type FetchStream: Stream<Item = Result<super::FetchResponse, tonic::Status>>
+    type FetchStream: Stream<Item = Result<super::super::msg::FetchResponse, tonic::Status>>
       + Send
       + Sync
       + 'static;
     #[doc = " Fetch to process tasks (consumer)"]
     async fn fetch(
       &self,
-      request: tonic::Request<super::FetchRequest>,
+      request: tonic::Request<super::super::msg::FetchRequest>,
     ) -> Result<tonic::Response<Self::FetchStream>, tonic::Status>;
   }
   #[derive(Debug)]
@@ -119,13 +156,16 @@ pub mod tasks_core_server {
     fn call(&mut self, req: http::Request<B>) -> Self::Future {
       let inner = self.inner.clone();
       match req.uri().path() {
-        "/taskstub.TasksCore/Create" => {
+        "/service.TasksCore/Create" => {
           #[allow(non_camel_case_types)]
           struct CreateSvc<T: TasksCore>(pub Arc<T>);
-          impl<T: TasksCore> tonic::server::UnaryService<super::CreateRequest> for CreateSvc<T> {
-            type Response = super::CreateResponse;
+          impl<T: TasksCore> tonic::server::UnaryService<super::super::msg::CreateRequest> for CreateSvc<T> {
+            type Response = super::super::msg::CreateResponse;
             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-            fn call(&mut self, request: tonic::Request<super::CreateRequest>) -> Self::Future {
+            fn call(
+              &mut self,
+              request: tonic::Request<super::super::msg::CreateRequest>,
+            ) -> Self::Future {
               let inner = self.0.clone();
               let fut = async move { (*inner).create(request).await };
               Box::pin(fut)
@@ -147,13 +187,16 @@ pub mod tasks_core_server {
           };
           Box::pin(fut)
         }
-        "/taskstub.TasksCore/Ack" => {
+        "/service.TasksCore/Ack" => {
           #[allow(non_camel_case_types)]
           struct AckSvc<T: TasksCore>(pub Arc<T>);
-          impl<T: TasksCore> tonic::server::UnaryService<super::AckRequest> for AckSvc<T> {
-            type Response = super::Empty;
+          impl<T: TasksCore> tonic::server::UnaryService<super::super::msg::AckRequest> for AckSvc<T> {
+            type Response = super::super::msg::Empty;
             type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-            fn call(&mut self, request: tonic::Request<super::AckRequest>) -> Self::Future {
+            fn call(
+              &mut self,
+              request: tonic::Request<super::super::msg::AckRequest>,
+            ) -> Self::Future {
               let inner = self.0.clone();
               let fut = async move { (*inner).ack(request).await };
               Box::pin(fut)
@@ -175,14 +218,19 @@ pub mod tasks_core_server {
           };
           Box::pin(fut)
         }
-        "/taskstub.TasksCore/Fetch" => {
+        "/service.TasksCore/Fetch" => {
           #[allow(non_camel_case_types)]
           struct FetchSvc<T: TasksCore>(pub Arc<T>);
-          impl<T: TasksCore> tonic::server::ServerStreamingService<super::FetchRequest> for FetchSvc<T> {
-            type Response = super::FetchResponse;
+          impl<T: TasksCore> tonic::server::ServerStreamingService<super::super::msg::FetchRequest>
+            for FetchSvc<T>
+          {
+            type Response = super::super::msg::FetchResponse;
             type ResponseStream = T::FetchStream;
             type Future = BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
-            fn call(&mut self, request: tonic::Request<super::FetchRequest>) -> Self::Future {
+            fn call(
+              &mut self,
+              request: tonic::Request<super::super::msg::FetchRequest>,
+            ) -> Self::Future {
               let inner = self.0.clone();
               let fut = async move { (*inner).fetch(request).await };
               Box::pin(fut)
@@ -233,6 +281,6 @@ pub mod tasks_core_server {
     }
   }
   impl<T: TasksCore> tonic::transport::NamedService for TasksCoreServer<T> {
-    const NAME: &'static str = "taskstub.TasksCore";
+    const NAME: &'static str = "service.TasksCore";
   }
 }

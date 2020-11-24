@@ -10,11 +10,9 @@ prost = "0.6.1"
 serde = { version = "1.0.115", default-features = false, features = ["serde_derive"] }
 serde_json = "1.0.57"
 xactor = { version = "0.7.7", default-features = false, features = ["runtime-tokio"] }
+proto = { path = "../proto" }
 
 [dev-dependencies]
 tokio = { version = "0.2.22", features = ["macros", "time"] }
 tracing-subscriber = "0.2.14"
 tracing = "0.1.19"
-
-[build-dependencies]
-proto = { path = "../proto" }

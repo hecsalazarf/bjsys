@@ -2,8 +2,8 @@ use crate::ack::AckManager;
 use crate::dispatcher::{MasterDispatcher, TaskStream};
 use crate::interceptor::RequestInterceptor;
 use crate::store::{MultiplexedStore, RedisStorage};
-use crate::stub::tasks::server::{TasksCore, TasksCoreServer};
-use crate::stub::tasks::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
+use proto::server::{TasksCore, TasksCoreServer};
+use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};

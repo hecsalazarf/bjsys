@@ -1,17 +1,6 @@
 syntax = "proto3";
 
-package taskstub;
-
-service TasksCore {
-  // Create a new task (producer)
-  rpc Create(CreateRequest) returns (CreateResponse) {}
-
-  // Acknowledge that a task was processed (consumer)
-  rpc Ack(AckRequest) returns (Empty) {}
-
-  // Fetch to process tasks (consumer)
-  rpc Fetch(FetchRequest) returns (stream FetchResponse) {}
-}
+package msg;
 
 // Create Request
 message CreateRequest {

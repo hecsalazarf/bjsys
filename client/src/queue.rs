@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::task::Builder;
-use crate::taskstub::tasks_core_client::TasksCoreClient as Client;
+use proto::client::TasksCoreClient as Client;
 use serde::Serialize;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
