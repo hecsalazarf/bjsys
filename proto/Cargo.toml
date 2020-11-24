@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
 edition = "2018"
 
+[features]
+# Client generated service
+client = []
+# Server generated service
+server = []
+
 [dependencies]
 prost = "0.6.1"
 tonic = "0.3.1"

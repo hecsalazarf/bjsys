@@ -15,4 +15,4 @@ xactor = { version = "0.7.8", default-features = false, features = ["runtime-tok
 rand = "0.7.3"
 validator = "0.11.0"
 utils = { path = "../utils" }
-proto = { path = "../proto" }
+proto = { path = "../proto", features = ["server"] }
