@@ -736,6 +736,7 @@ dependencies = [
  "prost",
  "tonic",
  "tonic-build",
+ "validator",
 ]
 
 [[package]]

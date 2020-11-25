@@ -46,9 +46,8 @@ impl TasksCore for TasksService {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
     let payload = request.into_inner();
-    // TODO: Validate request data;
-
     let mut store = self.store.clone();
+  
     let res = if payload.delay > 0 {
       store.create_delayed_task(&payload, payload.delay).await
     } else {

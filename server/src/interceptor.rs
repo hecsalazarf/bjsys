@@ -20,9 +20,19 @@ impl<T: ValidatePayload> RequestInterceptor for Request<T> {
     if errors.is_empty() {
       Ok(())
     } else {
-      // TODO: Implement richer error model to send error details
-      // https://grpc.io/docs/guides/error/
-      Err(Status::new(Code::InvalidArgument, "Payload is not valid"))
+      use prost::Message;
+      use proto::errors::BadRequest;
+
+      let br = BadRequest::from(errors);
+      let mut buffer = Vec::with_capacity(br.encoded_len());
+      // Never fails as the buffer has sufficient capacity
+      br.encode(&mut buffer).unwrap();
+
+      Err(Status::with_details(
+        Code::InvalidArgument,
+        "Payload is not valid",
+        buffer.into(),
+      ))
     }
   }
 }
@@ -59,7 +69,7 @@ struct Params;
 impl Params {
   const MIN: &'static str = "min";
   const MAX: &'static str = "max";
-  const EQUAL: &'static str = "equal";
+  const EQUAL: &'static str = "required";
   const FOUND: &'static str = "found";
 }
 
