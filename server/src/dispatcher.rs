@@ -33,65 +33,100 @@ impl MasterDispatcher {
     Self { addr }
   }
 
-  pub async fn create(&self, queue: String) -> Result<Dispatcher, Status> {
-    let disp = self
+  pub async fn produce(&self, queue: String) -> Result<TaskStream, Status> {
+    let stream = self
       .addr
       .call(QueueName(queue))
       .await
       .unwrap()
       .map_err(|_e| Status::unavailable(""))?;
 
-    Ok(disp)
+    Ok(stream)
   }
 }
 
-struct DispatcherRecord {
+#[derive(Clone)]
+struct DispatcherValue {
   addr: Addr<QueueDispatcher>,
   reader: Addr<QueueReader>,
   conn_id: usize,
 }
 
+type DispatcherRecord = (Arc<String>, DispatcherValue);
+type Registration = Result<DispatcherRecord, ActorError>;
+
 pub struct MasterWorker {
-  dispatchers: HashMap<Arc<String>, DispatcherRecord>,
+  dispatchers: HashMap<Arc<String>, DispatcherValue>,
   store: MultiplexedStore,
   ack: AckManager,
 }
 
-type DispatcherTuple = Result<(Addr<QueueDispatcher>, Addr<QueueReader>), ActorError>;
-
 impl MasterWorker {
-  async fn register(&mut self, addr: Addr<Self>, queue: Arc<String>) -> DispatcherTuple {
-    if self.dispatchers.contains_key(&queue) {
-      let r = self.dispatchers.get(&queue).unwrap();
-      Ok((r.addr.clone(), r.reader.clone()))
-    } else {
-      let reader = QueueReader::connect(&queue)
-        .await
-        .expect("failed_connect_store");
-      let conn_id = reader.id();
-      let reader = reader.start().await?;
-      let qd = QueueDispatcher::new(queue.clone(), addr, self.store.clone());
-      let addr = qd.start().await?;
-      let record = DispatcherRecord {
-        addr: addr.clone(),
-        reader: reader.clone(),
-        conn_id,
-      };
-      self.dispatchers.insert(queue.clone(), record);
-      Ok((addr, reader))
-    }
+  fn find(&self, queue: &String) -> Option<DispatcherRecord> {
+    self
+      .dispatchers
+      .get_key_value(queue)
+      .map(|r| (r.0.clone(), r.1.clone()))
+  }
+
+  async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
+    let reader = QueueReader::connect(&queue)
+      .await
+      .expect("connect to store");
+
+    let queue = Arc::new(queue);
+    let conn_id = reader.id();
+    let reader_addr = reader.start().await?;
+    let dispatcher = QueueDispatcher::new(queue.clone(), addr, self.store.clone());
+    let dispatcher_addr = dispatcher.start().await?;
+    let record = DispatcherValue {
+      addr: dispatcher_addr,
+      reader: reader_addr,
+      conn_id,
+    };
+    self.dispatchers.insert(queue.clone(), record.clone());
+    Ok((queue, record))
+  }
+
+  async fn start_stream(&self, record: DispatcherRecord) -> Result<TaskStream, ActorError> {
+    let (tx, rx) = mpsc::channel(1);
+    let exit = Arc::new(Notify::new());
+
+    let worker = DispatchWorker {
+      ack: self.ack.clone(),
+      queue: record.0,
+      reader: record.1.reader,
+      dispatcher: record.1.addr,
+      exit,
+      tx,
+    };
+
+    let exit = worker.exit.clone();
+    let dispatcher = worker.dispatcher.clone();
+    let worker_addr = worker.start().await?;
+    let id = worker_addr.actor_id();
+
+    worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
+    let wr = WorkerRecord {
+      _addr: worker_addr,
+      pending_task: None,
+      exit,
+    };
+    dispatcher.call(DispatcherCmd::Init(id, wr)).await?;
+
+    Ok(TaskStream::new(rx, dispatcher, id))
   }
 
   async fn unregister(&mut self, queue: Arc<String>) {
-    if let Some(mut r) = self.dispatchers.remove(queue.as_ref()) {
-      let conn_id = r.conn_id;
-      self.store.stop_by_id(std::iter::once(conn_id)).await;
-      r.reader.stop(None).expect("failed_stop_reader");
+    if let Some(mut record) = self.dispatchers.remove(queue.as_ref()) {
+      use std::iter::once;
+      self.store.stop_by_id(once(record.conn_id)).await;
+      record.reader.stop(None).expect("failed_stop_reader");
     }
   }
 }
 
-#[message(result = "Result<Dispatcher, ActorError>")]
+#[message(result = "Result<TaskStream, ActorError>")]
 struct QueueName(String);
 
 #[message]
@@ -107,18 +142,18 @@ impl Handler<QueueName> for MasterWorker {
     &mut self,
     ctx: &mut ActorContext<Self>,
     queue: QueueName,
-  ) -> Result<Dispatcher, ActorError> {
-    let queue = Arc::new(queue.0);
-    let ack = self.ack.clone();
+  ) -> Result<TaskStream, ActorError> {
+    let queue = queue.0;
+    let record: DispatcherRecord;
 
-    let (dispatcher, reader) = self.register(ctx.address(), queue.clone()).await?;
+    if let Some(r) = self.find(&queue) {
+      record = r;
+    } else {
+      record = self.register(ctx.address(), queue).await?;
+    }
 
-    Ok(Dispatcher {
-      dispatcher,
-      ack,
-      reader,
-      queue,
-    })
+    let stream = self.start_stream(record).await?;
+    Ok(stream)
   }
 }
 
@@ -128,33 +163,6 @@ impl Handler<MasterCmd> for MasterWorker {
     match cmd {
       MasterCmd::Unregister(queue) => self.unregister(queue).await,
     };
-  }
-}
-
-pub struct Dispatcher {
-  dispatcher: Addr<QueueDispatcher>,
-  ack: AckManager,
-  reader: Addr<QueueReader>,
-  queue: Arc<String>,
-}
-
-impl Dispatcher {
-  pub async fn into_stream(self) -> Result<TaskStream, Box<dyn std::error::Error>> {
-    let mut worker = DispatchWorker::from(self);
-    let exit = worker.exit_signal();
-    let dispatcher = worker.dispatcher();
-    let rx = worker.receiver();
-
-    let addr = worker.start().await?;
-    addr.send(WorkerCmd::Fetch).expect("send_fetch");
-    let id = addr.actor_id();
-    let wr = WorkerRecord {
-      _addr: addr,
-      pending_task: None,
-      exit,
-    };
-    dispatcher.call(DispatcherCmd::Init(id, wr)).await?;
-    Ok(TaskStream::new(rx, dispatcher, id))
   }
 }
 
@@ -184,7 +192,7 @@ impl QueueDispatcher {
   }
 
   async fn stop_worker(&mut self, id: u64) -> usize {
-    // Never fails as it was created before
+    // Never fails as it was previously created
     let worker = self.workers.remove(&id).unwrap();
     if let Some(task) = worker.pending_task {
       task.finish();
@@ -356,26 +364,13 @@ enum WorkerCmd {
 struct DispatchWorker {
   ack: AckManager,
   tx: mpsc::Sender<Result<FetchResponse, Status>>,
-  rx: Option<mpsc::Receiver<Result<FetchResponse, Status>>>,
-  master: Addr<QueueDispatcher>,
+  dispatcher: Addr<QueueDispatcher>,
   reader: Addr<QueueReader>,
   exit: Arc<Notify>,
   queue: Arc<String>,
 }
 
 impl DispatchWorker {
-  pub fn receiver(&mut self) -> mpsc::Receiver<Result<FetchResponse, Status>> {
-    self.rx.take().unwrap()
-  }
-
-  pub fn dispatcher(&mut self) -> Addr<QueueDispatcher> {
-    self.master.clone()
-  }
-
-  pub fn exit_signal(&mut self) -> Arc<Notify> {
-    self.exit.clone()
-  }
-
   async fn send(&mut self, task: FetchResponse, id: u64) {
     let notify = self.ack.in_process(task.id.clone());
 
@@ -384,7 +379,7 @@ impl DispatchWorker {
     // command. So we don't care for error because Dispatch Worker is
     // dropped as well.
     self
-      .master
+      .dispatcher
       .call(DispatcherCmd::Add(id, notify.clone()))
       .await
       .unwrap_or(());
@@ -395,7 +390,7 @@ impl DispatchWorker {
       .expect("Cannot send incoming task");
     notify.wait_to_finish().await;
     self
-      .master
+      .dispatcher
       .call(DispatcherCmd::Remove(id))
       .await
       .unwrap_or(());
@@ -431,28 +426,6 @@ impl DispatchWorker {
           break;
         }
       };
-    }
-  }
-}
-
-impl From<Dispatcher> for DispatchWorker {
-  fn from(dispatcher: Dispatcher) -> Self {
-    let ack = dispatcher.ack;
-    let reader = dispatcher.reader;
-    let queue = dispatcher.queue;
-    let master = dispatcher.dispatcher;
-    let (tx, rx) = mpsc::channel(1);
-    let rx = Some(rx);
-    let exit = Arc::new(Notify::new());
-
-    Self {
-      ack,
-      tx,
-      rx,
-      queue,
-      reader,
-      master,
-      exit,
     }
   }
 }

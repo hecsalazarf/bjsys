@@ -47,7 +47,7 @@ impl TasksCore for TasksService {
     request.intercept()?;
     let payload = request.into_inner();
     let mut store = self.store.clone();
-  
+
     let res = if payload.delay > 0 {
       store.create_delayed_task(&payload, payload.delay).await
     } else {
@@ -78,11 +78,9 @@ impl TasksCore for TasksService {
   async fn fetch(&self, request: Request<FetchRequest>) -> ServiceResult<Self::FetchStream> {
     request.intercept()?;
     let payload = request.into_inner();
-    let queue = payload.queue;
-    let dispatcher = self.dispatcher.create(queue).await?;
+    let stream = self.dispatcher.produce(payload.queue).await?;
 
-    let tasks_stream = dispatcher.into_stream().await.expect("into_stream");
-    Ok(Response::new(tasks_stream))
+    Ok(Response::new(stream))
   }
 }
 
