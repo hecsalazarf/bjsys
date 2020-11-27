@@ -1,12 +1,12 @@
 use crate::error::Error;
-use crate::task::Task;
+use crate::task::{Context, Task};
 use proto::client::TasksCoreClient as Client;
 use proto::{AckRequest, FetchRequest, TaskStatus};
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
-use xactor::{message, Actor, Addr, Context, Handler};
+use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 #[derive(Debug)]
 pub struct WorkerBuilder<T, P>
@@ -123,7 +123,7 @@ where
   T: DeserializeOwned + Send,
   P: Processor<T>,
 {
-  async fn fetch(&mut self) -> Result<(), Error> {
+  async fn fetch(&mut self, worker_id: u64) -> Result<(), Error> {
     let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
 
     while let Some(response) = stream.message().await? {
@@ -133,7 +133,8 @@ where
       let queue = response.queue.clone();
 
       let task = Task::from_response(response)?;
-      match self.processor.process(task).await {
+      let ctx = Context::new(worker_id);
+      match self.processor.process(task, ctx).await {
         Err(e) => {
           let (s, m) = match e {
             ProcessError::Failed(m) => (TaskStatus::Failed, m),
@@ -175,9 +176,9 @@ where
   T: DeserializeOwned + Send,
   P: Processor<T>,
 {
-  async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: WorkerCmd) -> Result<(), Error> {
+  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: WorkerCmd) -> Result<(), Error> {
     match cmd {
-      WorkerCmd::Fetch => self.fetch().await,
+      WorkerCmd::Fetch => self.fetch(ctx.actor_id()).await,
     }
   }
 }
@@ -200,5 +201,5 @@ impl ProcessError {
 
 #[tonic::async_trait]
 pub trait Processor<T: DeserializeOwned>: Sized + Send + 'static {
-  async fn process(&mut self, task: Task<T>) -> Result<Option<String>, ProcessError>;
+  async fn process(&mut self, task: Task<T>, ctx: Context) -> Result<Option<String>, ProcessError>;
 }

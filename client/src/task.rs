@@ -65,6 +65,10 @@ impl<T: DeserializeOwned> Task<T> {
     self.data
   }
 
+  pub fn get_ref(&self) -> &T {
+    &self.data
+  }
+
   pub(crate) fn from_response(response: FetchResponse) -> Result<Self, DataError> {
     let data = serde_json::from_str(&response.data)?;
 
@@ -75,6 +79,20 @@ impl<T: DeserializeOwned> Task<T> {
     };
 
     Ok(task)
+  }
+}
+
+pub struct Context {
+  worker_id: u64,
+}
+
+impl Context {
+  pub(crate) fn new(worker_id: u64) -> Self {
+    Self { worker_id }
+  }
+
+  pub fn worker_id(&self) -> u64 {
+    self.worker_id
   }
 }
 
