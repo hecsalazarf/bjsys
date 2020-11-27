@@ -1,5 +1,5 @@
-use crate::ack::{AckManager, WaitingTask};
-use crate::scheduler::QueueScheduler;
+use crate::manager::{Manager, WaitingTask};
+use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
 use crate::store::{MultiplexedStore, RedisStorage, Store, StoreError};
 use core::task::Poll;
@@ -21,14 +21,14 @@ pub struct MasterDispatcher {
 }
 
 impl MasterDispatcher {
-  pub async fn init(store: MultiplexedStore, ack: AckManager) -> Self {
+  pub async fn init(store: MultiplexedStore, manager: Manager) -> Self {
     let worker = MasterWorker {
       dispatchers: HashMap::new(),
       store,
-      ack,
+      manager,
     };
 
-    let addr = worker.start().await.expect("master_worker_failed");
+    let addr = worker.start().await.expect("start worker");
 
     Self { addr }
   }
@@ -47,8 +47,8 @@ impl MasterDispatcher {
 
 #[derive(Clone)]
 struct DispatcherValue {
-  addr: Addr<QueueDispatcher>,
-  reader: Addr<QueueReader>,
+  dispatcher: Addr<Dispatcher>,
+  reader: Addr<Reader>,
   conn_id: usize,
 }
 
@@ -58,7 +58,7 @@ type Registration = Result<DispatcherRecord, ActorError>;
 pub struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
   store: MultiplexedStore,
-  ack: AckManager,
+  manager: Manager,
 }
 
 impl MasterWorker {
@@ -70,17 +70,17 @@ impl MasterWorker {
   }
 
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
-    let reader = QueueReader::connect(&queue)
+    let queue = Arc::new(queue);
+    let reader = Reader::connect(queue.clone())
       .await
       .expect("connect to store");
 
-    let queue = Arc::new(queue);
     let conn_id = reader.id();
     let reader_addr = reader.start().await?;
-    let dispatcher = QueueDispatcher::new(queue.clone(), addr, self.store.clone());
+    let dispatcher = Dispatcher::new(queue.clone(), addr, self.store.clone());
     let dispatcher_addr = dispatcher.start().await?;
     let record = DispatcherValue {
-      addr: dispatcher_addr,
+      dispatcher: dispatcher_addr,
       reader: reader_addr,
       conn_id,
     };
@@ -92,22 +92,25 @@ impl MasterWorker {
     let (tx, rx) = mpsc::channel(1);
     let exit = Arc::new(Notify::new());
 
-    let worker = DispatchWorker {
-      ack: self.ack.clone(),
+    let consumer = Consumer {
+      manager: self.manager.clone(),
       queue: record.0,
       reader: record.1.reader,
-      dispatcher: record.1.addr,
+      dispatcher: record.1.dispatcher,
       exit,
       tx,
     };
 
-    let exit = worker.exit.clone();
-    let dispatcher = worker.dispatcher.clone();
-    let worker_addr = worker.start().await?;
+    let exit = consumer.exit.clone();
+    let dispatcher = consumer.dispatcher.clone();
+    let worker_addr = consumer.start().await?;
     let id = worker_addr.actor_id();
 
-    worker_addr.send(WorkerCmd::Fetch).expect("send_fetch");
-    let wr = WorkerRecord {
+    worker_addr
+      .send(ConsumerCmd::Fetch)
+      .expect("start fetching");
+
+    let wr = ConsumerValue {
       _addr: worker_addr,
       pending_task: None,
       exit,
@@ -121,7 +124,7 @@ impl MasterWorker {
     if let Some(mut record) = self.dispatchers.remove(queue.as_ref()) {
       use std::iter::once;
       self.store.stop_by_id(once(record.conn_id)).await;
-      record.reader.stop(None).expect("failed_stop_reader");
+      record.reader.stop(None).expect("stop reader");
     }
   }
 }
@@ -166,68 +169,68 @@ impl Handler<MasterCmd> for MasterWorker {
   }
 }
 
-struct WorkerRecord {
-  _addr: Addr<DispatchWorker>,
+struct ConsumerValue {
+  _addr: Addr<Consumer>,
   pending_task: Option<WaitingTask>,
   exit: Arc<Notify>,
 }
 
-pub struct QueueDispatcher {
-  workers: HashMap<u64, WorkerRecord>,
+pub struct Dispatcher {
+  consumers: HashMap<u64, ConsumerValue>,
   master: Addr<MasterWorker>,
-  name: Arc<String>,
-  scheduler: QueueScheduler,
+  queue: Arc<String>,
+  scheduler: Scheduler,
 }
 
-impl QueueDispatcher {
-  fn new(name: Arc<String>, master: Addr<MasterWorker>, store: MultiplexedStore) -> Self {
-    let workers = HashMap::new();
-    let scheduler = QueueScheduler::new(name.clone(), store);
+impl Dispatcher {
+  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: MultiplexedStore) -> Self {
+    let consumers = HashMap::new();
+    let scheduler = Scheduler::new(queue.clone(), store);
     Self {
-      name,
+      queue,
       master,
-      workers,
+      consumers,
       scheduler,
     }
   }
 
-  async fn stop_worker(&mut self, id: u64) -> usize {
+  async fn stop_consumer(&mut self, id: u64) -> usize {
     // Never fails as it was previously created
-    let worker = self.workers.remove(&id).unwrap();
-    if let Some(task) = worker.pending_task {
+    let consumer = self.consumers.remove(&id).unwrap();
+    if let Some(task) = consumer.pending_task {
       task.finish();
     }
-    worker.exit.notify();
+    consumer.exit.notify();
 
-    self.workers.len()
+    self.consumers.len()
   }
 
   async fn stop_all(&mut self) {
-    let all = self.workers.drain();
-    for (_, worker) in all {
-      if let Some(task) = worker.pending_task {
+    let all = self.consumers.drain();
+    for (_, consumer) in all {
+      if let Some(task) = consumer.pending_task {
         task.finish();
       }
-      worker.exit.notify();
+      consumer.exit.notify();
     }
   }
 
   fn add_pending(&mut self, id: u64, task: WaitingTask) {
-    if let Some(w) = self.workers.get_mut(&id) {
-      w.pending_task = Some(task);
+    if let Some(consumer) = self.consumers.get_mut(&id) {
+      consumer.pending_task = Some(task);
     }
   }
 
   fn remove_pending(&mut self, id: u64) {
-    if let Some(w) = self.workers.get_mut(&id) {
-      w.pending_task.take();
+    if let Some(consumer) = self.consumers.get_mut(&id) {
+      consumer.pending_task.take();
     }
   }
 
-  fn active(&mut self) -> Vec<Weak<String>> {
-    let map = self.workers.iter().filter_map(|(_, record)| {
+  fn get_active(&mut self) -> Vec<Weak<String>> {
+    let map = self.consumers.iter().filter_map(|(_, value)| {
       // Map all active tasks being processed, returning its ID
-      record.pending_task.as_ref().map(|task| task.id())
+      value.pending_task.as_ref().map(|task| task.id())
     });
 
     map.collect()
@@ -235,23 +238,27 @@ impl QueueDispatcher {
 }
 
 #[tonic::async_trait]
-impl Actor for QueueDispatcher {
+impl Actor for Dispatcher {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     self.stop_all().await;
     // Inform master to drop this address
     self
       .master
-      .call(MasterCmd::Unregister(self.name.clone()))
+      .call(MasterCmd::Unregister(self.queue.clone()))
       .await
       .unwrap();
-    self.scheduler.stop().expect("stop_scheduler");
-    debug!("Queue '{}' is no longer being served", self.name);
+    self.scheduler.stop().expect("stop scheduler");
+    debug!("Queue '{}' is no longer being served", self.queue);
   }
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    ctx.subscribe::<ServiceCmd>().await.expect("sub_to_shut");
+    ctx
+      .subscribe::<ServiceCmd>()
+      .await
+      .expect("subscribe to shutdown");
+
     self.scheduler.start(ctx.address()).await?;
-    debug!("Queue '{}' is being dispatched", self.name,);
+    debug!("Queue '{}' is being dispatched", self.queue);
     Ok(())
   }
 }
@@ -260,15 +267,12 @@ impl Actor for QueueDispatcher {
 enum DispatcherCmd {
   Add(u64, WaitingTask),
   Remove(u64),
-  Init(u64, WorkerRecord),
+  Init(u64, ConsumerValue),
   Disconnect(u64),
 }
 
-#[message(result = "Vec<Weak<String>>")]
-pub struct ActiveTasks;
-
 #[tonic::async_trait]
-impl Handler<DispatcherCmd> for QueueDispatcher {
+impl Handler<DispatcherCmd> for Dispatcher {
   async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
     match cmd {
       DispatcherCmd::Add(id, t) => {
@@ -278,10 +282,10 @@ impl Handler<DispatcherCmd> for QueueDispatcher {
         self.remove_pending(id);
       }
       DispatcherCmd::Init(id, addr) => {
-        self.workers.insert(id, addr);
+        self.consumers.insert(id, addr);
       }
       DispatcherCmd::Disconnect(id) => {
-        if self.stop_worker(id).await == 0 {
+        if self.stop_consumer(id).await == 0 {
           ctx.stop(None);
         }
       }
@@ -290,7 +294,7 @@ impl Handler<DispatcherCmd> for QueueDispatcher {
 }
 
 #[tonic::async_trait]
-impl Handler<ServiceCmd> for QueueDispatcher {
+impl Handler<ServiceCmd> for Dispatcher {
   async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ServiceCmd) {
     match cmd {
       ServiceCmd::Shutdown => {
@@ -300,21 +304,24 @@ impl Handler<ServiceCmd> for QueueDispatcher {
   }
 }
 
+#[message(result = "Vec<Weak<String>>")]
+pub struct ActiveTasks;
+
 #[tonic::async_trait]
-impl Handler<ActiveTasks> for QueueDispatcher {
+impl Handler<ActiveTasks> for Dispatcher {
   async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<String>> {
-    self.active()
+    self.get_active()
   }
 }
 
-struct QueueReader {
-  key: String,
+struct Reader {
+  key: Arc<String>,
   store: Store,
 }
 
-impl QueueReader {
-  pub async fn connect(queue: &str) -> Result<Self, StoreError> {
-    let key = String::from(queue);
+impl Reader {
+  pub async fn connect(queue: Arc<String>) -> Result<Self, StoreError> {
+    let key = queue;
     let store = Store::connect().await?;
 
     Ok(Self { key, store })
@@ -331,7 +338,7 @@ impl QueueReader {
 }
 
 #[tonic::async_trait]
-impl Actor for QueueReader {
+impl Actor for Reader {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     debug!("Reader '{}' stopped", self.key);
   }
@@ -346,7 +353,7 @@ impl Actor for QueueReader {
 struct ReadTask;
 
 #[tonic::async_trait]
-impl Handler<ReadTask> for QueueReader {
+impl Handler<ReadTask> for Reader {
   async fn handle(
     &mut self,
     _: &mut ActorContext<Self>,
@@ -357,22 +364,22 @@ impl Handler<ReadTask> for QueueReader {
 }
 
 #[message]
-enum WorkerCmd {
+enum ConsumerCmd {
   Fetch,
 }
 
-struct DispatchWorker {
-  ack: AckManager,
+struct Consumer {
+  manager: Manager,
   tx: mpsc::Sender<Result<FetchResponse, Status>>,
-  dispatcher: Addr<QueueDispatcher>,
-  reader: Addr<QueueReader>,
+  dispatcher: Addr<Dispatcher>,
+  reader: Addr<Reader>,
   exit: Arc<Notify>,
   queue: Arc<String>,
 }
 
-impl DispatchWorker {
+impl Consumer {
   async fn send(&mut self, task: FetchResponse, id: u64) {
-    let notify = self.ack.in_process(task.id.clone());
+    let notify = self.manager.in_process(task.id.clone());
 
     // Call to master may fail when its address has been dropped,
     // which it's posible only when the dispatcher received the stop
@@ -383,11 +390,7 @@ impl DispatchWorker {
       .call(DispatcherCmd::Add(id, notify.clone()))
       .await
       .unwrap_or(());
-    self
-      .tx
-      .send(Ok(task))
-      .await
-      .expect("Cannot send incoming task");
+    self.tx.send(Ok(task)).await.expect("send incoming task");
     notify.wait_to_finish().await;
     self
       .dispatcher
@@ -412,7 +415,7 @@ impl DispatchWorker {
                 .tx
                 .send(Err(Status::unavailable("unavailable")))
                 .await
-                .expect("failed_send_task");
+                .expect("send task");
             }
             Ok(Some(t)) => {
               self.send(t, id).await;
@@ -431,7 +434,7 @@ impl DispatchWorker {
 }
 
 #[tonic::async_trait]
-impl Actor for DispatchWorker {
+impl Actor for Consumer {
   async fn stopped(&mut self, ctx: &mut ActorContext<Self>) {
     debug!(
       "Worker [{}] disconnected from '{}'",
@@ -447,24 +450,24 @@ impl Actor for DispatchWorker {
 }
 
 #[tonic::async_trait]
-impl Handler<WorkerCmd> for DispatchWorker {
-  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: WorkerCmd) {
+impl Handler<ConsumerCmd> for Consumer {
+  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ConsumerCmd) {
     match cmd {
-      WorkerCmd::Fetch => self.fetch(ctx.actor_id()).await,
+      ConsumerCmd::Fetch => self.fetch(ctx.actor_id()).await,
     }
   }
 }
 
 pub struct TaskStream {
   stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-  dispatcher: Addr<QueueDispatcher>,
+  dispatcher: Addr<Dispatcher>,
   id: u64,
 }
 
 impl TaskStream {
   fn new(
     stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-    dispatcher: Addr<QueueDispatcher>,
+    dispatcher: Addr<Dispatcher>,
     id: u64,
   ) -> Self {
     Self {

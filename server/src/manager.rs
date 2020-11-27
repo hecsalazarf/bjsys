@@ -9,22 +9,22 @@ use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context, Handler};
 
 #[derive(Clone)]
-pub struct AckManager {
-  worker: Addr<AckWorker>,
+pub struct Manager {
+  worker: Addr<ManagerWorker>,
 }
 
-impl AckManager {
+impl Manager {
   pub async fn init(store: MultiplexedStore) -> Result<Self, Box<dyn std::error::Error>> {
-    let worker = AckWorker::new(store).start().await?;
+    let worker = ManagerWorker::new(store).start().await?;
     Ok(Self { worker })
   }
 
-  pub async fn check(&self, req: AckRequest) -> Result<(), Status> {
+  pub async fn ack(&self, req: AckRequest) -> Result<(), Status> {
     self
       .worker
       .call(Acknowledge(req))
       .await
-      .expect("cannot_check")
+      .expect("call ack task")
   }
 
   pub fn in_process(&self, task_id: String) -> WaitingTask {
@@ -32,7 +32,7 @@ impl AckManager {
     self
       .worker
       .send(AckCmd::InProcess(waiting.clone()))
-      .expect("ack_in_process");
+      .expect("call in process");
     waiting
   }
 }
@@ -46,12 +46,12 @@ enum AckCmd {
 #[message(result = "Result<(), Status>")]
 struct Acknowledge(AckRequest);
 
-struct AckWorker {
+struct ManagerWorker {
   tasks: HashMap<Arc<String>, Arc<Notify>>,
   store: MultiplexedStore,
 }
 
-impl AckWorker {
+impl ManagerWorker {
   pub fn new(store: MultiplexedStore) -> Self {
     Self {
       tasks: HashMap::new(),
@@ -67,7 +67,7 @@ impl AckWorker {
     self.tasks.remove(&id);
   }
 
-  async fn report(&mut self, request: AckRequest) -> Result<(), Status> {
+  async fn ack(&mut self, request: AckRequest) -> Result<(), Status> {
     // Never fails as it's previously validated
     let status = TaskStatus::from_i32(request.status).unwrap();
 
@@ -98,10 +98,10 @@ impl AckWorker {
   }
 }
 
-impl Actor for AckWorker {}
+impl Actor for ManagerWorker {}
 
 #[tonic::async_trait]
-impl Handler<AckCmd> for AckWorker {
+impl Handler<AckCmd> for ManagerWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: AckCmd) {
     match cmd {
       AckCmd::InProcess(t) => self.in_process(t),
@@ -111,12 +111,12 @@ impl Handler<AckCmd> for AckWorker {
 }
 
 #[tonic::async_trait]
-impl Handler<Acknowledge> for AckWorker {
+impl Handler<Acknowledge> for ManagerWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), Status> {
     let req = req.0; // Unwrap request
     if self.tasks.contains_key(&req.task_id) {
       // Report task only if it's pending
-      self.report(req).await
+      self.ack(req).await
     } else {
       Err(Status::invalid_argument("Task is not pending"))
     }
@@ -127,11 +127,11 @@ impl Handler<Acknowledge> for AckWorker {
 pub struct WaitingTask {
   id: Arc<String>,
   notify: Arc<Notify>,
-  worker: Addr<AckWorker>,
+  worker: Addr<ManagerWorker>,
 }
 
 impl WaitingTask {
-  fn new(id: String, worker: Addr<AckWorker>) -> Self {
+  fn new(id: String, worker: Addr<ManagerWorker>) -> Self {
     Self {
       id: Arc::new(id),
       notify: Arc::new(Notify::new()),
@@ -152,7 +152,7 @@ impl WaitingTask {
     self
       .worker
       .send(AckCmd::Remove(self.id))
-      .expect("fail_to_finish");
+      .expect("send task to finish");
   }
 }
 

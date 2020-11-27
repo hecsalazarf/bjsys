@@ -8,7 +8,7 @@ pub trait RequestInterceptor {
   fn validate_payload(&self) -> Result<(), Status>;
 }
 
-impl<T: ValidatePayload> RequestInterceptor for Request<T> {
+impl<T: MessageValidator> RequestInterceptor for Request<T> {
   fn intercept(&self) -> Result<(), Status> {
     // Validate payload data
     self.validate_payload()?;
@@ -73,13 +73,13 @@ impl Params {
   const FOUND: &'static str = "found";
 }
 
-pub trait ValidatePayload {
+pub trait MessageValidator {
   fn validate(&self) -> ValidationErrors {
     ValidationErrors::new()
   }
 }
 
-impl ValidatePayload for CreateRequest {
+impl MessageValidator for CreateRequest {
   fn validate(&self) -> ValidationErrors {
     let mut errors = ValidationErrors::new();
     // Queue length
@@ -98,7 +98,7 @@ impl ValidatePayload for CreateRequest {
   }
 }
 
-impl ValidatePayload for AckRequest {
+impl MessageValidator for AckRequest {
   fn validate(&self) -> ValidationErrors {
     let mut errors = ValidationErrors::new();
     // Task ID length
@@ -125,7 +125,7 @@ impl ValidatePayload for AckRequest {
   }
 }
 
-impl ValidatePayload for FetchRequest {
+impl MessageValidator for FetchRequest {
   fn validate(&self) -> ValidationErrors {
     let mut errors = ValidationErrors::new();
     // Hostname length

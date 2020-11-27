@@ -1,6 +1,6 @@
-use crate::ack::AckManager;
 use crate::dispatcher::{MasterDispatcher, TaskStream};
 use crate::interceptor::RequestInterceptor;
+use crate::manager::Manager;
 use crate::store::{MultiplexedStore, RedisStorage};
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
@@ -11,18 +11,18 @@ use tracing::{debug, error, info};
 pub struct TasksService {
   // This store must be used ONLY for non-blocking operations
   store: MultiplexedStore,
-  ack_manager: AckManager,
+  manager: Manager,
   dispatcher: MasterDispatcher,
 }
 
 impl TasksService {
   pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
     let store = MultiplexedStore::connect().await?;
-    let ack_manager = AckManager::init(store.clone()).await?;
-    let dispatcher = MasterDispatcher::init(store.clone(), ack_manager.clone()).await;
+    let manager = Manager::init(store.clone()).await?;
+    let dispatcher = MasterDispatcher::init(store.clone(), manager.clone()).await;
     Ok(TasksCoreServer::new(TasksService {
       store: store,
-      ack_manager,
+      manager,
       dispatcher,
     }))
   }
@@ -68,8 +68,8 @@ impl TasksCore for TasksService {
   async fn ack(&self, request: Request<AckRequest>) -> ServiceResult<Empty> {
     request.intercept()?;
     self
-      .ack_manager
-      .check(request.into_inner())
+      .manager
+      .ack(request.into_inner())
       .await
       .map(|_| Response::new(Empty::default()))
   }

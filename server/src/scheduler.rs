@@ -1,52 +1,52 @@
-use crate::dispatcher::{ActiveTasks, QueueDispatcher};
+use crate::dispatcher::{ActiveTasks, Dispatcher};
 use crate::store::{MultiplexedStore, RedisStorage, StoreError};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context, Error as ActorError, Handler};
 
-pub struct QueueScheduler {
-  inner: Scheduler,
+pub struct Scheduler {
+  inner: QueueScheduler,
 }
 
-impl QueueScheduler {
+impl Scheduler {
   pub fn new(queue: Arc<String>, store: MultiplexedStore) -> Self {
-    let instance = Scheduler::new(store, queue);
+    let instance = QueueScheduler::new(store, queue);
     Self { inner: instance }
   }
 
-  pub async fn start(&mut self, dispatcher: Addr<QueueDispatcher>) -> Result<(), ActorError> {
-    if let Scheduler::Inst(ref mut inst) = self.inner {
+  pub async fn start(&mut self, dispatcher: Addr<Dispatcher>) -> Result<(), ActorError> {
+    if let QueueScheduler::Inst(ref mut inst) = self.inner {
       let mut scheduler = inst.take().unwrap();
       scheduler.dispatcher.replace(dispatcher);
       let addr = scheduler.start().await?;
-      self.inner = Scheduler::Started(addr);
+      self.inner = QueueScheduler::Started(addr);
     }
     Ok(())
   }
 
   pub fn stop(&mut self) -> Result<(), ActorError> {
-    if let Scheduler::Started(ref mut addr) = self.inner {
+    if let QueueScheduler::Started(ref mut addr) = self.inner {
       addr.stop(None)?;
     }
     Ok(())
   }
 }
 
-enum Scheduler {
+enum QueueScheduler {
   Inst(Option<SchedulerWorker>),
   Started(Addr<SchedulerWorker>),
 }
 
-impl Scheduler {
+impl QueueScheduler {
   fn new(store: MultiplexedStore, queue: Arc<String>) -> Self {
-    Scheduler::Inst(Some(SchedulerWorker::new(store, queue)))
+    QueueScheduler::Inst(Some(SchedulerWorker::new(store, queue)))
   }
 }
 
 pub struct SchedulerWorker {
   store: MultiplexedStore,
-  dispatcher: Option<Addr<QueueDispatcher>>,
+  dispatcher: Option<Addr<Dispatcher>>,
   queue: Arc<String>,
 }
 
@@ -122,12 +122,12 @@ impl Actor for SchedulerWorker {
     // TODO: The poll_stalled() has to be called at start, then at intervals
     // of the configured value
     ctx.send_interval(PollTasks::Stalled, Duration::from_secs(5));
-    debug!("Scheduler '{}' started", self.queue);
+    debug!("QueueScheduler '{}' started", self.queue);
     Ok(())
   }
 
   async fn stopped(&mut self, _ctx: &mut Context<Self>) {
-    debug!("Scheduler '{}' stopped", self.queue);
+    debug!("QueueScheduler '{}' stopped", self.queue);
   }
 }
 
