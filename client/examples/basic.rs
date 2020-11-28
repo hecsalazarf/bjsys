@@ -1,7 +1,7 @@
+use client::error::ProcessError;
 use client::queue::Queue;
 use client::task::{Builder, Context, Task};
 use client::worker::{Processor, Worker};
-use client::error::ProcessError;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -14,8 +14,10 @@ struct Car {
 struct TestProcessor;
 
 #[tonic::async_trait]
-impl Processor<Car> for TestProcessor {
+impl Processor for TestProcessor {
   type Ok = &'static str;
+  type Data = Car;
+
   async fn process(&mut self, task: Task<Car>, ctx: Context) -> Result<Self::Ok, ProcessError> {
     tracing::info!(
       "Worker[{}] processing task {} with data: {:?}",
