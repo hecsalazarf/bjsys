@@ -5,7 +5,8 @@ use std::time::Duration;
 
 pub use serde_json::Error as DataError;
 
-pub struct Builder<T: Serialize> {
+#[derive(Debug)]
+pub struct Builder<T> {
   data: T,
   delay: u64,
   retry: u32,
@@ -46,7 +47,7 @@ impl<T: Serialize> Builder<T> {
 }
 
 #[derive(Debug)]
-pub struct Task<T: DeserializeOwned> {
+pub struct Task<T> {
   id: String,
   queue: String,
   data: T,
@@ -82,6 +83,7 @@ impl<T: DeserializeOwned> Task<T> {
   }
 }
 
+#[derive(Debug)]
 pub struct Context {
   worker_id: u64,
 }

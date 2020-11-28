@@ -8,7 +8,7 @@ use tonic::transport::{Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 #[derive(Debug)]
-pub struct WorkerBuilder<P: Processor> {
+pub struct WorkerBuilder<P> {
   consumer: FetchRequest,
   endpoint: Endpoint,
   processor: Option<P>,
@@ -57,7 +57,7 @@ impl<P: Processor> WorkerBuilder<P> {
   }
 }
 
-pub struct Worker<P: Processor> {
+pub struct Worker<P> {
   addr: Addr<ProcessorWorker<P>>,
 }
 
@@ -83,7 +83,7 @@ enum WorkerCmd {
   Fetch,
 }
 
-struct ProcessorWorker<P: Processor> {
+struct ProcessorWorker<P> {
   consumer: FetchRequest,
   client: Client<Channel>,
   processor: P,

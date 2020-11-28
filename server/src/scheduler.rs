@@ -44,7 +44,7 @@ impl QueueScheduler {
   }
 }
 
-pub struct SchedulerWorker {
+struct SchedulerWorker {
   store: MultiplexedStore,
   dispatcher: Option<Addr<Dispatcher>>,
   queue: Arc<String>,
