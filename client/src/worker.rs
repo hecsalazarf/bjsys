@@ -1,8 +1,8 @@
-use crate::error::Error;
+use crate::error::{Error, ProcessCode, ProcessError};
 use crate::task::{Context, Task};
 use proto::client::TasksCoreClient as Client;
 use proto::{AckRequest, FetchRequest, TaskStatus};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
@@ -127,29 +127,25 @@ where
     let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
 
     while let Some(response) = stream.message().await? {
-      let mut status = TaskStatus::Done;
-      let mut message = String::new();
       let id = response.id.clone();
       let queue = response.queue.clone();
 
       let task = Task::from_response(response)?;
       let ctx = Context::new(worker_id);
-      match self.processor.process(task, ctx).await {
+      let (status, message) = match self.processor.process(task, ctx).await {
         Err(e) => {
-          let (s, m) = match e {
-            ProcessError::Failed(m) => (TaskStatus::Failed, m),
-            ProcessError::Canceled(m) => (TaskStatus::Canceled, m),
+          let status = match e.code() {
+            ProcessCode::Failed => TaskStatus::Failed,
+            ProcessCode::Canceled => TaskStatus::Canceled,
           };
 
-          status = s;
-          message = m;
+          (status, e.into_msg())
         }
-        Ok(Some(m)) => {
-          message = m;
+        Ok(ref m) => {
+          // It's developer's responsability to send a message that can be serialized
+          (TaskStatus::Done, serde_json::to_string(m).unwrap())
         }
-        _ => {}
-      }
-
+      };
       let req = AckRequest {
         queue,
         task_id: id,
@@ -183,23 +179,8 @@ where
   }
 }
 
-#[derive(Debug)]
-pub enum ProcessError {
-  Failed(String),
-  Canceled(String),
-}
-
-impl ProcessError {
-  pub fn failed<M: Into<String>>(message: M) -> Self {
-    Self::Failed(message.into())
-  }
-
-  pub fn canceled<M: Into<String>>(message: M) -> Self {
-    Self::Canceled(message.into())
-  }
-}
-
 #[tonic::async_trait]
 pub trait Processor<T: DeserializeOwned>: Sized + Send + 'static {
-  async fn process(&mut self, task: Task<T>, ctx: Context) -> Result<Option<String>, ProcessError>;
+  type Ok: Serialize;
+  async fn process(&mut self, task: Task<T>, ctx: Context) -> Result<Self::Ok, ProcessError>;
 }

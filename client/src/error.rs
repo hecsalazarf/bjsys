@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::Error as SerdeError;
 use std::{error::Error as StdError, fmt};
 use tonic::{transport::Error as TransportError, Status};
@@ -93,5 +94,64 @@ impl StdError for Error {
       .source
       .as_ref()
       .map(|source| &**source as &(dyn StdError + 'static))
+  }
+}
+
+#[derive(Clone)]
+pub(crate) enum ProcessCode {
+  Failed,
+  Canceled,
+}
+
+pub struct ProcessError {
+  code: ProcessCode,
+  message: String,
+}
+
+impl ProcessError {
+  fn new<T: Serialize>(code: ProcessCode, msg: T) -> Self {
+    let message = serde_json::to_string(&msg).unwrap();
+    Self { code, message }
+  }
+
+  pub fn failed<T: Serialize>(message: T) -> Self {
+    Self::new(ProcessCode::Failed, message)
+  }
+
+  pub fn canceled<T: Serialize>(message: T) -> Self {
+    Self::new(ProcessCode::Canceled, message)
+  }
+
+  pub(crate) fn into_msg(self) -> String {
+    self.message
+  }
+
+  pub(crate) fn code(&self) -> ProcessCode {
+    self.code.clone()
+  }
+
+  fn description(&self) -> &str {
+    match self.code {
+      ProcessCode::Canceled => "Task was cancelled",
+      ProcessCode::Failed => "Task failed while being processed",
+    }
+  }
+}
+
+impl<E: StdError> From<E> for ProcessError {
+  fn from(err: E) -> Self {
+    Self::failed(err.to_string())
+  }
+}
+
+impl fmt::Display for ProcessError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{}: {}", self.description(), self.message)
+  }
+}
+
+impl fmt::Debug for ProcessError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{}: {}", self.description(), self.message)
   }
 }
