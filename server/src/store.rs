@@ -1,13 +1,12 @@
 use proto::{AckRequest, CreateRequest, FetchResponse, TaskHash};
 use redis::{
   aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  AsyncCommands, Client, ConnectionAddr, ConnectionInfo,
+  AsyncCommands, Client,
 };
 use std::time::{Duration, SystemTime};
-use tokio::{stream::StreamExt, sync::mpsc};
 use utils::id::{generate_id, IdGenerator};
 
-pub use redis::RedisError as StoreError;
+pub use redis::{ConnectionInfo, RedisError as StoreError};
 
 struct QueueSuffix;
 
@@ -20,20 +19,22 @@ impl QueueSuffix {
 
 #[tonic::async_trait]
 pub trait InnerConnection: Sized + ConnectionLike {
-  async fn create(conn_info: ConnectionInfo) -> Result<Self, StoreError>;
+  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError>;
 }
 
 #[tonic::async_trait]
 impl InnerConnection for SingleConnection {
-  async fn create(conn_info: ConnectionInfo) -> Result<Self, StoreError> {
-    Client::open(conn_info)?.get_async_connection().await
+  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
+    Client::open(conn_info.clone())?
+      .get_async_connection()
+      .await
   }
 }
 
 #[tonic::async_trait]
 impl InnerConnection for MultiplexedConnection {
-  async fn create(conn_info: ConnectionInfo) -> Result<Self, StoreError> {
-    Client::open(conn_info)?
+  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
+    Client::open(conn_info.clone())?
       .get_multiplexed_async_connection()
       .await
   }
@@ -45,16 +46,8 @@ struct Connection<C: InnerConnection> {
 }
 
 impl<C: InnerConnection> Connection<C> {
-  async fn start() -> Result<Connection<C>, StoreError> {
-    // TODO: Retrieve connection info from configuration
-    let conn_info = ConnectionInfo {
-      db: 0,
-      addr: Box::new(ConnectionAddr::Tcp("127.0.0.1".to_owned(), 6380)),
-      username: None,
-      passwd: None,
-    };
-
-    let mut inner = C::create(conn_info).await?;
+  async fn start(conn_info: &ConnectionInfo) -> Result<Connection<C>, StoreError> {
+    let mut inner = C::create(&conn_info).await?;
     let id = redis::cmd("CLIENT")
       .arg("ID")
       .query_async(&mut inner)
@@ -273,33 +266,33 @@ pub struct Store {
 }
 
 impl Store {
-  pub async fn connect() -> Result<Self, StoreError> {
-    Connection::start().await.map(|conn| {
+  pub async fn connect(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
+    Connection::start(conn_info).await.map(|conn| {
       let script = ScriptStore::new();
       Self { conn, script }
     })
   }
 
-  pub async fn _connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    // Create each connection concurrently
-    for _ in 0..size {
-      let txc = tx.clone();
-      tokio::spawn(async move {
-        let conn_res = Connection::start().await.map(|conn| Store {
-          conn,
-          script: ScriptStore::new(),
-        });
-        // We don't care if it fails
-        txc.send(conn_res).unwrap_or(());
-      });
-    }
-    // Drop the first sender, so that stream does not block indefinitely
-    drop(tx);
+  // pub async fn _connect_batch(size: usize) -> Result<Vec<Store>, StoreError> {
+  //   let (tx, rx) = mpsc::unbounded_channel();
+  //   // Create each connection concurrently
+  //   for _ in 0..size {
+  //     let txc = tx.clone();
+  //     tokio::spawn(async move {
+  //       let conn_res = Connection::start().await.map(|conn| Store {
+  //         conn,
+  //         script: ScriptStore::new(),
+  //       });
+  //       // We don't care if it fails
+  //       txc.send(conn_res).unwrap_or(());
+  //     });
+  //   }
+  //   // Drop the first sender, so that stream does not block indefinitely
+  //   drop(tx);
 
-    // Wait for all connections, fail at first error
-    rx.collect().await
-  }
+  //   // Wait for all connections, fail at first error
+  //   rx.collect().await
+  // }
 
   pub fn id(&self) -> usize {
     self.conn.id()
@@ -324,8 +317,8 @@ pub struct MultiplexedStore {
 }
 
 impl MultiplexedStore {
-  pub async fn connect() -> Result<Self, StoreError> {
-    Connection::start().await.map(|conn| {
+  pub async fn connect(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
+    Connection::start(conn_info).await.map(|conn| {
       let script = ScriptStore::new();
       Self { conn, script }
     })

@@ -1,7 +1,7 @@
 use crate::dispatcher::{MasterDispatcher, TaskStream};
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
-use crate::store::{MultiplexedStore, RedisStorage};
+use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage};
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 
@@ -16,10 +16,12 @@ pub struct TasksService {
 }
 
 impl TasksService {
-  pub async fn new() -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
-    let store = MultiplexedStore::connect().await?;
-    let manager = Manager::init(store.clone()).await?;
-    let dispatcher = MasterDispatcher::init(store.clone(), manager.clone()).await;
+  pub async fn new(
+    redis_conn: &ConnectionInfo,
+  ) -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
+    let store = MultiplexedStore::connect(redis_conn).await?;
+    let manager = Manager::init(&store).await?;
+    let dispatcher = MasterDispatcher::init(&store, &manager, redis_conn).await;
     Ok(TasksCoreServer::new(TasksService {
       store: store,
       manager,

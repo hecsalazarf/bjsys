@@ -14,8 +14,8 @@ pub struct Manager {
 }
 
 impl Manager {
-  pub async fn init(store: MultiplexedStore) -> Result<Self, Box<dyn std::error::Error>> {
-    let worker = ManagerWorker::new(store).start().await?;
+  pub async fn init(store: &MultiplexedStore) -> Result<Self, Box<dyn std::error::Error>> {
+    let worker = ManagerWorker::new(&store).start().await?;
     Ok(Self { worker })
   }
 
@@ -52,10 +52,10 @@ struct ManagerWorker {
 }
 
 impl ManagerWorker {
-  pub fn new(store: MultiplexedStore) -> Self {
+  pub fn new(store: &MultiplexedStore) -> Self {
     Self {
       tasks: HashMap::new(),
-      store,
+      store: store.clone(),
     }
   }
 

@@ -1,7 +1,7 @@
 use crate::manager::{Manager, WaitingTask};
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
-use crate::store::{MultiplexedStore, RedisStorage, Store, StoreError};
+use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage, Store, StoreError};
 use core::task::Poll;
 use proto::FetchResponse;
 use std::collections::HashMap;
@@ -21,11 +21,16 @@ pub struct MasterDispatcher {
 }
 
 impl MasterDispatcher {
-  pub async fn init(store: MultiplexedStore, manager: Manager) -> Self {
+  pub async fn init(
+    store: &MultiplexedStore,
+    manager: &Manager,
+    conn_info: &ConnectionInfo,
+  ) -> Self {
     let worker = MasterWorker {
       dispatchers: HashMap::new(),
-      store,
-      manager,
+      conn_info: conn_info.clone(),
+      store: store.clone(),
+      manager: manager.clone(),
     };
 
     let addr = worker.start().await.expect("start worker");
@@ -59,6 +64,7 @@ pub struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
   store: MultiplexedStore,
   manager: Manager,
+  conn_info: ConnectionInfo,
 }
 
 impl MasterWorker {
@@ -71,7 +77,7 @@ impl MasterWorker {
 
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
     let queue = Arc::new(queue);
-    let reader = Reader::connect(queue.clone())
+    let reader = Reader::connect(queue.clone(), &self.conn_info)
       .await
       .expect("connect to store");
 
@@ -320,9 +326,9 @@ struct Reader {
 }
 
 impl Reader {
-  pub async fn connect(queue: Arc<String>) -> Result<Self, StoreError> {
+  pub async fn connect(queue: Arc<String>, conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
     let key = queue;
-    let store = Store::connect().await?;
+    let store = Store::connect(conn_info).await?;
 
     Ok(Self { key, store })
   }
