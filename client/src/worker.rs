@@ -65,12 +65,10 @@ impl<P: Processor> Worker<P> {
   pub fn builder(processor: P) -> WorkerBuilder<P> {
     let processor = Some(processor);
 
-    let worker = WorkerBuilder {
+    WorkerBuilder {
       processor,
       ..WorkerBuilder::default()
-    };
-
-    worker
+    }
   }
 
   pub async fn run(&self) -> Result<(), Error> {

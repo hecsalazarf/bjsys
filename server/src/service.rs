@@ -22,22 +22,23 @@ impl TasksService {
     let store = MultiplexedStore::connect(redis_conn).await?;
     let manager = Manager::init(&store).await?;
     let dispatcher = MasterDispatcher::init(&store, &manager, redis_conn).await;
-    Ok(TasksCoreServer::new(TasksService {
-      store: store,
+
+    let server = TasksCoreServer::new(TasksService {
+      store,
       manager,
       dispatcher,
-    }))
+    });
+    Ok(server)
   }
 
   pub fn exit_signal() -> impl std::future::Future<Output = ()> {
     use xactor::Service;
-    let signal = async {
+    async {
       tokio::signal::ctrl_c().await.unwrap();
       info!("Shutting down...");
       let mut addr = xactor::Broker::from_registry().await.unwrap();
       addr.publish(ServiceCmd::Shutdown).unwrap();
-    };
-    signal
+    }
   }
 }
 

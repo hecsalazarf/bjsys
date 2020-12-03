@@ -19,24 +19,20 @@ impl QueueSuffix {
 
 #[tonic::async_trait]
 pub trait InnerConnection: Sized + ConnectionLike {
-  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError>;
+  async fn create(info: ConnectionInfo) -> Result<Self, StoreError>;
 }
 
 #[tonic::async_trait]
 impl InnerConnection for SingleConnection {
-  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
-    Client::open(conn_info.clone())?
-      .get_async_connection()
-      .await
+  async fn create(info: ConnectionInfo) -> Result<Self, StoreError> {
+    Client::open(info)?.get_async_connection().await
   }
 }
 
 #[tonic::async_trait]
 impl InnerConnection for MultiplexedConnection {
-  async fn create(conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
-    Client::open(conn_info.clone())?
-      .get_multiplexed_async_connection()
-      .await
+  async fn create(info: ConnectionInfo) -> Result<Self, StoreError> {
+    Client::open(info)?.get_multiplexed_async_connection().await
   }
 }
 
@@ -47,7 +43,7 @@ struct Connection<C: InnerConnection> {
 
 impl<C: InnerConnection> Connection<C> {
   async fn start(conn_info: &ConnectionInfo) -> Result<Connection<C>, StoreError> {
-    let mut inner = C::create(&conn_info).await?;
+    let mut inner = C::create(conn_info.clone()).await?;
     let id = redis::cmd("CLIENT")
       .arg("ID")
       .query_async(&mut inner)

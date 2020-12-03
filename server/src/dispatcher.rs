@@ -68,13 +68,6 @@ pub struct MasterWorker {
 }
 
 impl MasterWorker {
-  fn find(&self, queue: &String) -> Option<DispatcherRecord> {
-    self
-      .dispatchers
-      .get_key_value(queue)
-      .map(|r| (r.0.clone(), r.1.clone()))
-  }
-
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
     let queue = Arc::new(queue);
     let reader = Reader::connect(queue.clone(), &self.conn_info)
@@ -153,13 +146,12 @@ impl Handler<QueueName> for MasterWorker {
     queue: QueueName,
   ) -> Result<TaskStream, ActorError> {
     let queue = queue.0;
-    let record: DispatcherRecord;
 
-    if let Some(r) = self.find(&queue) {
-      record = r;
+    let record = if let Some(r) = self.dispatchers.get_key_value(&queue) {
+      (r.0.clone(), r.1.clone())
     } else {
-      record = self.register(ctx.address(), queue).await?;
-    }
+      self.register(ctx.address(), queue).await?
+    };
 
     let stream = self.start_stream(record).await?;
     Ok(stream)
