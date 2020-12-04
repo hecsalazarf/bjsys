@@ -1,9 +1,7 @@
 use proto::{AckRequest, CreateRequest, FetchResponse, TaskHash};
-use redis::{
-  aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection},
-  AsyncCommands, Client,
-};
-use std::time::{Duration, SystemTime};
+use redis::aio::{Connection as SingleConnection, ConnectionLike, MultiplexedConnection};
+use redis::{AsyncCommands, Client, ConnectionAddr};
+use std::collections::HashMap;
 use utils::id::{generate_id, IdGenerator};
 
 pub use redis::{ConnectionInfo, RedisError as StoreError};
@@ -367,7 +365,9 @@ fn backoff_time(count: u64) -> u64 {
 /// Calculate the time in milliseconds at which a task should be processed.
 /// We add the current time to the given delay.
 fn time_to_delay(delay: u64) -> u64 {
-  let delay = Duration::from_millis(delay);
+  use std::time::SystemTime;
+
+  let delay = std::time::Duration::from_millis(delay);
   let now = SystemTime::now()
     .duration_since(SystemTime::UNIX_EPOCH)
     .unwrap();
@@ -390,24 +390,85 @@ fn member_from_id(id: &str, queue: &str) -> String {
 
 /// Return the current time in milliseconds as u64
 fn now_as_millis() -> u64 {
+  use std::time::SystemTime;
+
   SystemTime::now()
     .duration_since(SystemTime::UNIX_EPOCH)
     .unwrap()
     .as_millis() as u64
 }
 
-use redis::{Script, ScriptInvocation};
-use std::collections::HashMap;
-use std::sync::Once;
+pub struct RedisServer {
+  cmd: std::process::Command,
+}
+
+impl RedisServer {
+  pub fn new() -> Self {
+    let mut cmd = std::process::Command::new("redis-server");
+    cmd.args(&["--save", "60", "100"]);
+    cmd.args(&["--unixsocketperm", "700"]);
+    Self { cmd }
+  }
+
+  pub fn with_dir(mut self, dir: &std::path::Path) -> Self {
+    use std::ffi::OsStr;
+
+    self.cmd.args(&[OsStr::new("--dir"), dir.as_os_str()]);
+    self
+  }
+
+  pub fn with_log(mut self, file: &str) -> Self {
+    self.cmd.args(&["--logfile", file]);
+    self
+  }
+
+  pub fn boot(self, conn: &ConnectionInfo) -> Result<std::process::Child, StoreError> {
+    use std::ffi::OsStr;
+    const TIME_LIMIT: u64 = 60;
+
+    let mut cmd = self.cmd;
+    match conn.addr.as_ref() {
+      ConnectionAddr::Tcp(host, port) => {
+        let port = port.to_string();
+        cmd.args(&["--port", &port]);
+        cmd.args(&["--bind", &host]);
+      }
+      ConnectionAddr::Unix(path) => {
+        cmd.args(&["--port", "0"]);
+        cmd.args(&[OsStr::new("--unixsocket"), path.as_os_str()]);
+      }
+      _ => unimplemented!(),
+    }
+
+    let child = cmd.spawn()?;
+    let client = Client::open(conn.clone()).unwrap();
+    let timer = std::time::Instant::now();
+
+    loop {
+      let res = client.get_connection();
+      if res.is_ok() {
+        tracing::info!("Redis initialized with PID {}", child.id());
+        return Ok(child);
+      } else if timer.elapsed().as_secs() < TIME_LIMIT {
+        tracing::info!("Waiting for redis to boot up");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+      } else {
+        return res.map(|_| child);
+      }
+    }
+  }
+}
 
 pub struct ScriptStore {
-  scripts: Option<HashMap<&'static str, Script>>,
+  scripts: Option<HashMap<&'static str, redis::Script>>,
 }
 
 impl ScriptStore {
   pub const SCHEDULE_DELAY: &'static str = "SCHEDULE_DELAY";
 
   pub fn new() -> &'static Self {
+    use std::sync::Once;
+
     static START: Once = Once::new();
     static mut SCRIPT: ScriptStore = ScriptStore { scripts: None };
 
@@ -419,7 +480,7 @@ impl ScriptStore {
         let mut iter = SCRIPTS.iter();
         while let Some(key) = iter.next() {
           let code = *iter.next().unwrap();
-          scripts.insert(*key, Script::new(code));
+          scripts.insert(*key, redis::Script::new(code));
         }
 
         SCRIPT.scripts = Some(scripts);
@@ -429,7 +490,7 @@ impl ScriptStore {
     }
   }
 
-  pub fn prepare_for(&'static self, script: &str) -> ScriptInvocation {
+  pub fn prepare_for(&'static self, script: &str) -> redis::ScriptInvocation {
     self
       .scripts
       .as_ref()

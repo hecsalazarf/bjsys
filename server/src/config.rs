@@ -66,7 +66,10 @@ impl Config {
         Arg::with_name(ArgName::REDIS)
           .short("r")
           .long("redis")
-          .help(&format!("Redis URL (default: {})", DefaultValue::REDIS_URL))
+          .help(&format!(
+            "Redis URL (default: {})",
+            DefaultValue::REDIS_SOCKET
+          ))
           .takes_value(true)
           .value_name("URL"),
       )
@@ -82,7 +85,12 @@ impl Config {
 impl Default for Config {
   fn default() -> Self {
     let socket = SocketAddr::new(DefaultValue::HOST.parse().unwrap(), DefaultValue::PORT);
-    let redis_conn = DefaultValue::REDIS_URL.parse().unwrap();
+
+    let redis_conn = if cfg!(unix) {
+      DefaultValue::REDIS_SOCKET.parse().unwrap()
+    } else {
+      DefaultValue::REDIS_URL.parse().unwrap()
+    };
 
     Self { socket, redis_conn }
   }
@@ -101,4 +109,5 @@ impl DefaultValue {
   const PORT: u16 = 7330;
   const HOST: &'static str = "0.0.0.0";
   const REDIS_URL: &'static str = "redis://127.0.0.1/0";
+  const REDIS_SOCKET: &'static str = "redis+unix:///tmp/redis.sock?db=0";
 }

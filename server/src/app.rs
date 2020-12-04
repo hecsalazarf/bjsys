@@ -1,19 +1,19 @@
 use crate::config::Config;
 use crate::service::TasksService;
+use crate::store::RedisServer;
 use proto::server::TasksCoreServer;
-use std::ffi::OsString;
+use std::{ffi::OsString, path::PathBuf};
 use tonic::transport::{
   server::{Router, Unimplemented},
   Server,
 };
-use tracing_subscriber::filter::EnvFilter;
-use tracing_subscriber::fmt::time::ChronoLocal;
+use tracing_subscriber::{filter::EnvFilter, fmt::time::ChronoLocal};
 
 type ServiceRouter = Router<TasksCoreServer<TasksService>, Unimplemented>;
 
-#[derive(Default)]
 pub struct Builder {
-  args: Option<Vec<OsString>>,
+  args: Vec<OsString>,
+  working_dir: PathBuf,
 }
 
 impl Builder {
@@ -22,8 +22,12 @@ impl Builder {
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
   {
-    let args = args.into_iter().map(|i| i.into()).collect();
-    self.args = Some(args);
+    self.args = args.into_iter().map(|i| i.into()).collect();
+    self
+  }
+
+  pub fn working_dir(mut self, dir: PathBuf) -> Self {
+    self.working_dir = dir;
     self
   }
 
@@ -46,14 +50,24 @@ impl Builder {
   }
 
   pub async fn init(self) -> App {
-    let config = if let Some(args) = self.args {
-      Config::with_args(args)
-    } else {
-      Config::default()
-    };
+    let config = Config::from(self.args);
+    let working_dir = self.working_dir;
+
+    let redis_res = RedisServer::new()
+      .with_dir(&working_dir)
+      .with_log("redis.log")
+      .boot(config.redis_conn());
+
+    if let Err(e) = redis_res {
+      exit(e);
+    }
     let router = Self::add_services(&config).await;
 
-    App { router, config }
+    App {
+      router,
+      config,
+      _redis: redis_res.unwrap(),
+    }
   }
 
   async fn add_services(config: &Config) -> ServiceRouter {
@@ -65,9 +79,19 @@ impl Builder {
   }
 }
 
+impl Default for Builder {
+  fn default() -> Self {
+    let args = Vec::new();
+    let working_dir = std::env::current_dir().unwrap();
+
+    Self { args, working_dir }
+  }
+}
+
 pub struct App {
   router: ServiceRouter,
   config: Config,
+  _redis: std::process::Child,
 }
 
 impl App {
@@ -77,7 +101,7 @@ impl App {
 
   pub async fn listen(self) {
     let config = self.config;
-    tracing::info!("Starting server on port {}", config.socket().port());
+    tracing::info!("Server is ready at port {}", config.socket().port());
     let signal = TasksService::exit_signal();
     if let Err(e) = self
       .router
@@ -92,4 +116,14 @@ impl App {
 fn exit<T: std::fmt::Display>(e: T) -> ! {
   tracing::error!("{}", e);
   std::process::exit(1)
+}
+
+impl From<Vec<OsString>> for Config {
+  fn from(args: Vec<OsString>) -> Self {
+    if args.len() > 1 {
+      Config::with_args(args)
+    } else {
+      Config::default()
+    }
+  }
 }
