@@ -13,7 +13,7 @@ struct Car {
 
 struct TestProcessor;
 
-#[tonic::async_trait]
+#[client::async_trait]
 impl Processor for TestProcessor {
   type Ok = &'static str;
   type Data = Car;

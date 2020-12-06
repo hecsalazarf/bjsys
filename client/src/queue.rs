@@ -27,8 +27,8 @@ impl QueueBuilder {
     self
   }
 
-  pub fn endpoint<T: Into<Uri>>(mut self, uri: T) -> Self {
-    self.endpoint = Endpoint::from(uri.into());
+  pub fn endpoint(mut self, uri: Uri) -> Self {
+    self.endpoint = uri.into();
     self
   }
 

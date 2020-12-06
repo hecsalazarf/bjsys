@@ -16,7 +16,7 @@ pub struct WorkerBuilder<P> {
 
 impl<P: Processor> Default for WorkerBuilder<P> {
   fn default() -> Self {
-    let endpoint = Endpoint::from_static("http://localhost:11000");
+    let endpoint = Endpoint::from_static("http://127.0.0.1:7330");
     let consumer = FetchRequest {
       hostname: String::from("rust"),
       queue: String::from("default"),
@@ -37,8 +37,8 @@ impl<P: Processor> WorkerBuilder<P> {
     self
   }
 
-  pub fn endpoint<U: Into<Uri>>(mut self, uri: U) -> Self {
-    self.endpoint = Endpoint::from(uri.into());
+  pub fn endpoint(mut self, uri: Uri) -> Self {
+    self.endpoint = uri.into();
     self
   }
 
