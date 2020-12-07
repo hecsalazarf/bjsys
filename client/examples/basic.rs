@@ -11,6 +11,7 @@ struct Car {
   make: String,
 }
 
+#[derive(Clone)]
 struct TestProcessor;
 
 #[client::async_trait]

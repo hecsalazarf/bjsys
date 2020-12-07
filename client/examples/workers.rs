@@ -9,6 +9,7 @@ struct Car {
   make: String,
 }
 
+#[derive(Clone)]
 struct TestProcessor;
 
 #[client::async_trait]
@@ -29,30 +30,27 @@ impl Processor for TestProcessor {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  const WORKERS: usize = 10;
-  let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(WORKERS + 1));
+  const WORKERS: u16 = 10;
   tracing_subscriber::fmt().init();
 
   let now = std::time::Instant::now();
-  for _ in 0..WORKERS {
-    let worker = Worker::builder(TestProcessor)
-      .for_queue("myqueue")
-      .connect()
-      .await
-      .unwrap();
-    let b = barrier.clone();
-    tokio::spawn(async move {
-      if let Err(e) = worker.run().await {
-        tracing::error!("Error while processing: {}", e);
-      }
-      b.wait().await;
-    });
-  }
+  let worker = Worker::builder(TestProcessor)
+    .for_queue("myqueue")
+    .concurrency(WORKERS)
+    .connect()
+    .await
+    .unwrap();
+
+  let handler = tokio::spawn(async move {
+    if let Err(e) = worker.run().await {
+      tracing::error!("Error while processing: {}", e);
+    }
+  });
   tracing::info!(
     "{} workers launched in {}ms",
     WORKERS,
     now.elapsed().as_millis()
   );
-  barrier.wait().await;
+  handler.await?;
   Ok(())
 }

@@ -1,5 +1,6 @@
 use crate::error::{Error, ProcessCode, ProcessError};
 use crate::task::{Context, Task};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use proto::client::TasksCoreClient as Client;
 use proto::{AckRequest, FetchRequest, TaskStatus};
 use serde::{de::DeserializeOwned, Serialize};
@@ -11,12 +12,14 @@ use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 pub struct WorkerBuilder<P> {
   consumer: FetchRequest,
   endpoint: Endpoint,
-  processor: Option<P>,
+  processor: P,
+  concurrency: u16,
 }
 
-impl<P: Processor> Default for WorkerBuilder<P> {
-  fn default() -> Self {
+impl<P: Processor + Clone> WorkerBuilder<P> {
+  pub fn new(processor: P) -> Self {
     let endpoint = Endpoint::from_static("http://127.0.0.1:7330");
+    let concurrency = 1;
     let consumer = FetchRequest {
       hostname: String::from("rust"),
       queue: String::from("default"),
@@ -26,12 +29,11 @@ impl<P: Processor> Default for WorkerBuilder<P> {
     Self {
       endpoint,
       consumer,
-      processor: None,
+      processor,
+      concurrency,
     }
   }
-}
 
-impl<P: Processor> WorkerBuilder<P> {
   pub fn for_queue<S: Into<String>>(mut self, name: S) -> Self {
     self.consumer.queue = name.into();
     self
@@ -42,37 +44,61 @@ impl<P: Processor> WorkerBuilder<P> {
     self
   }
 
+  pub fn concurrency(mut self, value: u16) -> Self {
+    if value == 0 {
+      panic!("concurrency must be greater than 0");
+    }
+    self.concurrency = value;
+    self
+  }
+
   pub async fn connect(self) -> Result<Worker<P>, Error> {
     let channel = self.endpoint.connect().await?;
-    let consumer = self.consumer;
-    let processor = self.processor.unwrap();
-
     let worker = ProcessorWorker {
-      consumer,
+      consumer: self.consumer,
+      processor: self.processor,
       client: Client::new(channel),
-      processor,
     };
-    let addr = worker.start().await.expect("start worker");
-    Ok(Worker { addr })
+
+    let futures = FuturesUnordered::new();
+    for _ in 1..self.concurrency {
+      futures.push(worker.clone().start());
+    }
+    futures.push(worker.start());
+
+    let addrs = futures
+      .map(|res| res.expect("start worker"))
+      .collect()
+      .await;
+
+    Ok(Worker { addrs })
   }
 }
 
 pub struct Worker<P> {
-  addr: Addr<ProcessorWorker<P>>,
+  addrs: Vec<Addr<ProcessorWorker<P>>>,
 }
 
-impl<P: Processor> Worker<P> {
+impl<P: Processor + Clone> Worker<P> {
   pub fn builder(processor: P) -> WorkerBuilder<P> {
-    let processor = Some(processor);
-
-    WorkerBuilder {
-      processor,
-      ..WorkerBuilder::default()
-    }
+    WorkerBuilder::new(processor)
   }
 
   pub async fn run(&self) -> Result<(), Error> {
-    self.addr.call(WorkerCmd::Fetch).await.expect("fetch tasks")
+    let futures = FuturesUnordered::new();
+    for addr in &self.addrs {
+      futures.push(addr.call(WorkerCmd::Fetch))
+    }
+
+    let acc = futures
+      .map(|res| res.expect("fetch tasks"))
+      .collect::<Vec<Result<(), Error>>>()
+      .await;
+
+    if let Some(err) = acc.into_iter().find(|r| r.is_err()) {
+      return err;
+    }
+    Ok(())
   }
 }
 
@@ -81,6 +107,7 @@ enum WorkerCmd {
   Fetch,
 }
 
+#[derive(Clone)]
 struct ProcessorWorker<P> {
   consumer: FetchRequest,
   client: Client<Channel>,

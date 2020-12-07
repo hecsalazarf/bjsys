@@ -16,7 +16,7 @@ impl Default for QueueBuilder {
   fn default() -> Self {
     Self {
       name: String::from("default"),
-      endpoint: Endpoint::from_static("http://localhost:11000"),
+      endpoint: Endpoint::from_static("http://127.0.0.1:7330"),
     }
   }
 }
