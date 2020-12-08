@@ -1,7 +1,7 @@
 use client::error::ProcessError;
 use client::queue::Queue;
 use client::task::{Builder, Context, Task};
-use client::worker::{Processor, Worker};
+use client::worker::Processor;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -12,10 +12,10 @@ struct Car {
 }
 
 #[derive(Clone)]
-struct TestProcessor;
+struct MyProcessor;
 
 #[client::async_trait]
-impl Processor for TestProcessor {
+impl Processor for MyProcessor {
   type Ok = &'static str;
   type Data = Car;
 
@@ -36,8 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::fmt().init();
 
   // Wait for incoming tasks
-  let processor = TestProcessor;
-  let worker = Worker::builder(processor)
+  let processor = MyProcessor;
+  let worker = processor.configure()
     .for_queue("myqueue")
     .connect()
     .await

@@ -3,9 +3,8 @@ use crate::task::{Context, Task};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use proto::client::TasksCoreClient as Client;
 use proto::{AckRequest, FetchRequest, TaskStatus};
-use serde::{de::DeserializeOwned, Serialize};
-use tonic::transport::channel::Channel;
-use tonic::transport::{Endpoint, Uri};
+use std::sync::Arc;
+use tonic::transport::{channel::Channel, Endpoint, Uri};
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 #[derive(Debug)]
@@ -55,7 +54,7 @@ impl<P: Processor + Clone> WorkerBuilder<P> {
   pub async fn connect(self) -> Result<Worker<P>, Error> {
     let channel = self.endpoint.connect().await?;
     let worker = ProcessorWorker {
-      consumer: self.consumer,
+      consumer: Arc::new(self.consumer),
       processor: self.processor,
       client: Client::new(channel),
     };
@@ -79,11 +78,7 @@ pub struct Worker<P> {
   addrs: Vec<Addr<ProcessorWorker<P>>>,
 }
 
-impl<P: Processor + Clone> Worker<P> {
-  pub fn builder(processor: P) -> WorkerBuilder<P> {
-    WorkerBuilder::new(processor)
-  }
-
+impl<P: Processor> Worker<P> {
   pub async fn run(&self) -> Result<(), Error> {
     let futures = FuturesUnordered::new();
     for addr in &self.addrs {
@@ -109,14 +104,15 @@ enum WorkerCmd {
 
 #[derive(Clone)]
 struct ProcessorWorker<P> {
-  consumer: FetchRequest,
+  consumer: Arc<FetchRequest>,
   client: Client<Channel>,
   processor: P,
 }
 
 impl<P: Processor> ProcessorWorker<P> {
   async fn fetch(&mut self, worker_id: u64) -> Result<(), Error> {
-    let mut stream = self.client.fetch(self.consumer.clone()).await?.into_inner();
+    let request = self.consumer.as_ref().clone();
+    let mut stream = self.client.fetch(request).await?.into_inner();
 
     while let Some(response) = stream.message().await? {
       let id = response.id.clone();
@@ -138,6 +134,7 @@ impl<P: Processor> ProcessorWorker<P> {
           (TaskStatus::Done, serde_json::to_string(m).unwrap())
         }
       };
+
       let req = AckRequest {
         queue,
         task_id: id,
@@ -163,12 +160,16 @@ impl<P: Processor> Handler<WorkerCmd> for ProcessorWorker<P> {
 }
 
 #[tonic::async_trait]
-pub trait Processor: Sized + Send + 'static {
-  type Ok: Serialize;
-  type Data: DeserializeOwned + Sized + Send + 'static;
+pub trait Processor: Sized + Send + Clone + 'static {
+  type Ok: serde::Serialize;
+  type Data: serde::de::DeserializeOwned + Sized + Send + 'static;
   async fn process(
     &mut self,
     task: Task<Self::Data>,
     ctx: Context,
   ) -> Result<Self::Ok, ProcessError>;
+
+  fn configure(self) -> WorkerBuilder<Self> {
+    WorkerBuilder::new(self)
+  }
 }
