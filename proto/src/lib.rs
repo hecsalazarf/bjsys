@@ -13,3 +13,8 @@ pub mod client {
 pub mod server {
   pub use super::stub::service::tasks_core_server::*;
 }
+
+#[cfg(feature = "server")]
+pub mod raft {
+  pub use super::stub::raft::*;
+}
