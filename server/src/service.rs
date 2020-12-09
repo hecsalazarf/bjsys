@@ -4,38 +4,70 @@ use crate::manager::Manager;
 use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage};
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
-
+use std::net::SocketAddr;
+use tonic::transport::{
+  server::{Router, Unimplemented},
+  Error, Server,
+};
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
 
-pub struct TasksService {
+#[tonic::async_trait]
+pub trait Runnable {
+  async fn listen_on(self, socket: SocketAddr) -> Result<(), Error>;
+}
+
+type ServiceRouter = Router<TasksCoreServer<TasksServiceImpl>, Unimplemented>;
+
+pub struct TaskService {
+  router: ServiceRouter,
+}
+
+impl TaskService {
+  pub async fn init(redis_info: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
+    let inner = TasksServiceImpl::init(redis_info).await?;
+    let router = Server::builder().add_service(TasksCoreServer::new(inner));
+
+    let service = Self { router };
+
+    Ok(service)
+  }
+}
+
+#[tonic::async_trait]
+impl Runnable for TaskService {
+  async fn listen_on(self, socket: SocketAddr) -> Result<(), Error> {
+    tracing::info!("Server is ready at port {}", socket.port());
+    let signal = TasksServiceImpl::exit_signal();
+    self.router.serve_with_shutdown(socket, signal).await
+  }
+}
+
+struct TasksServiceImpl {
   // This store must be used ONLY for non-blocking operations
   store: MultiplexedStore,
   manager: Manager,
   dispatcher: MasterDispatcher,
 }
 
-impl TasksService {
-  pub async fn new(
-    redis_conn: &ConnectionInfo,
-  ) -> Result<TasksCoreServer<Self>, Box<dyn std::error::Error>> {
+impl TasksServiceImpl {
+  pub async fn init(redis_conn: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
     let store = MultiplexedStore::connect(redis_conn).await?;
     let manager = Manager::init(&store).await?;
     let dispatcher = MasterDispatcher::init(&store, &manager, redis_conn).await;
 
-    let server = TasksCoreServer::new(TasksService {
+    let service = Self {
       store,
       manager,
       dispatcher,
-    });
-    Ok(server)
+    };
+    Ok(service)
   }
 
   pub fn exit_signal() -> impl std::future::Future<Output = ()> {
     use xactor::Service;
     async {
       tokio::signal::ctrl_c().await.unwrap();
-      info!("Shutting down...");
+      tracing::info!("Shutting down...");
       let mut addr = xactor::Broker::from_registry().await.unwrap();
       addr.publish(ServiceCmd::Shutdown).unwrap();
     }
@@ -45,7 +77,7 @@ impl TasksService {
 type ServiceResult<T> = Result<Response<T>, Status>;
 
 #[tonic::async_trait]
-impl TasksCore for TasksService {
+impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
     let payload = request.into_inner();
@@ -59,11 +91,11 @@ impl TasksCore for TasksService {
 
     res
       .map(|r| {
-        debug!("Task created with id {}", r);
+        tracing::debug!("Task created with id {}", r);
         Response::new(CreateResponse { task_id: r })
       })
       .map_err(|e| {
-        error!("Cannot create task: {}", e);
+        tracing::error!("Cannot create task: {}", e);
         Status::unavailable("Service not available")
       })
   }

@@ -1,15 +1,8 @@
 use crate::config::Config;
-use crate::service::TasksService;
+use crate::service::{Runnable, TaskService};
 use crate::store::RedisServer;
-use proto::server::TasksCoreServer;
 use std::{ffi::OsString, path::PathBuf, process::Child};
-use tonic::transport::{
-  server::{Router, Unimplemented},
-  Server,
-};
 use tracing_subscriber::filter::EnvFilter;
-
-type ServiceRouter = Router<TasksCoreServer<TasksService>, Unimplemented>;
 
 pub struct Builder {
   args: Vec<OsString>,
@@ -52,21 +45,16 @@ impl Builder {
     }
 
     let _redis = Self::boot_storage(&self.working_dir, &config);
-    let router = Self::add_services(&config).await;
-
-    App {
-      router,
-      config,
-      _redis,
-    }
-  }
-
-  async fn add_services(config: &Config) -> ServiceRouter {
-    let service = TasksService::new(&config.redis_conn()).await;
+    let service = TaskService::init(config.redis_conn()).await;
     if let Err(e) = &service {
       exit(e);
     }
-    Server::builder().add_service(service.unwrap())
+    let service = service.unwrap();
+    App {
+      service,
+      config,
+      _redis,
+    }
   }
 
   fn init_tracing(filter: EnvFilter, config: &Config) {
@@ -115,7 +103,7 @@ impl Default for Builder {
 }
 
 pub struct App {
-  router: ServiceRouter,
+  service: TaskService,
   config: Config,
   _redis: Child,
 }
@@ -127,13 +115,7 @@ impl App {
 
   pub async fn listen(self) {
     let config = self.config;
-    tracing::info!("Server is ready at port {}", config.socket().port());
-    let signal = TasksService::exit_signal();
-    if let Err(e) = self
-      .router
-      .serve_with_shutdown(config.socket(), signal)
-      .await
-    {
+    if let Err(e) = self.service.listen_on(config.socket()).await {
       exit(e);
     }
   }
