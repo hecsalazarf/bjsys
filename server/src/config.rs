@@ -8,6 +8,7 @@ pub struct Config {
   socket: SocketAddr,
   redis_conn: ConnectionInfo,
   log_filter: LevelFilter,
+  cluster_enabled: bool,
 }
 
 impl Config {
@@ -31,6 +32,10 @@ impl Config {
 
   pub fn log_filter(&self) -> LevelFilter {
     self.log_filter
+  }
+
+  pub fn is_cluster(&self) -> bool {
+    self.cluster_enabled
   }
 
   fn merge_cli(&mut self, args: Vec<OsString>) {
@@ -66,6 +71,9 @@ impl Config {
         _ => Self::exit(&format!("Invalid log level '{}'", filter)),
       }
     }
+
+    // Cluster enabled
+    self.cluster_enabled = matches.is_present(ArgName::CLUSTER_ENABLED);
   }
 
   fn cli_matches<'a>(args: Vec<OsString>) -> ArgMatches<'a> {
@@ -100,6 +108,11 @@ impl Config {
           .takes_value(true)
           .value_name("LEVEL"),
       )
+      .arg(
+        Arg::with_name(ArgName::CLUSTER_ENABLED)
+          .long("cluster-enabled")
+          .help("Enable cluster mode (disabled by default)"),
+      )
       .get_matches_from(args)
   }
 
@@ -114,11 +127,13 @@ impl Default for Config {
     let socket = SocketAddr::new(DefaultValue::HOST.parse().unwrap(), DefaultValue::PORT);
     let redis_conn = DefaultValue::REDIS_URL.parse().unwrap();
     let log_filter = DefaultValue::LOG_FILTER;
+    let cluster_enabled = true; // TODO: Should be false, only on DEV branch;
 
     Self {
       socket,
       redis_conn,
       log_filter,
+      cluster_enabled,
     }
   }
 }
@@ -139,6 +154,7 @@ impl ArgName {
   const PORT: &'static str = "PORT";
   const REDIS: &'static str = "REDIS";
   const LOG_FILTER: &'static str = "LOG_FILTER";
+  const CLUSTER_ENABLED: &'static str = "CLUSTER_ENABLED";
 }
 
 struct DefaultValue;
