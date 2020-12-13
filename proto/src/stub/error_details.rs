@@ -1,6 +1,6 @@
 /// Describes violations in a client request. This error type focuses on the
 /// syntactic aspects of the request.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct BadRequest {
   /// Describes all violations in a client request.
   #[prost(message, repeated, tag = "1")]
@@ -8,7 +8,7 @@ pub struct BadRequest {
 }
 pub mod bad_request {
   /// A message type used to describe a single bad request field.
-  #[derive(Clone, PartialEq, ::prost::Message)]
+  #[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
   pub struct FieldViolation {
     /// A path leading to a field in the request body. The value will be a
     /// sequence of dot-separated identifiers that identify a protocol buffer

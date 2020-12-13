@@ -41,6 +41,15 @@ impl Proto {
     self
   }
 
+  pub fn type_atribute<P, S>(mut self,path: P, attr: S) -> Self
+  where
+  P: AsRef<str>,
+  S: AsRef<str>, 
+  {
+    self.builder = self.builder.type_attribute(path, attr);
+    self
+  }
+
   pub fn compile(self) {
     // Tell Cargo to rerun the build script if either PROTO_DIR or OUT_DIR change
     println!("cargo:rerun-if-changed={}", self.include.display());
@@ -68,5 +77,7 @@ impl Proto {
 }
 
 fn main() {
-  Proto::configure(OUT_DIR).compile();
+  Proto::configure(OUT_DIR)
+    .type_atribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]")
+    .compile();
 }

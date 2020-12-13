@@ -1,5 +1,5 @@
 /// Client Request
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct ClientRequest {
   #[prost(string, tag = "1")]
   pub client: std::string::String,
@@ -9,7 +9,7 @@ pub struct ClientRequest {
   pub request: ::std::option::Option<client_request::Request>,
 }
 pub mod client_request {
-  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  #[derive(Clone, PartialEq, ::prost::Oneof, ::serde::Serialize, ::serde::Deserialize)]
   pub enum Request {
     #[prost(message, tag = "3")]
     Create(super::super::msg::CreateRequest),
@@ -20,7 +20,7 @@ pub mod client_request {
   }
 }
 /// Client Response
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct ClientResponse {
   #[prost(uint64, tag = "1")]
   pub serial: u64,
@@ -28,7 +28,7 @@ pub struct ClientResponse {
   pub response: ::std::option::Option<client_response::Response>,
 }
 pub mod client_response {
-  #[derive(Clone, PartialEq, ::prost::Oneof)]
+  #[derive(Clone, PartialEq, ::prost::Oneof, ::serde::Serialize, ::serde::Deserialize)]
   pub enum Response {
     #[prost(message, tag = "3")]
     Create(super::super::msg::CreateResponse),
@@ -39,7 +39,7 @@ pub mod client_response {
   }
 }
 /// An RPC sent by a cluster leader to replicate log entries (§5.3), and as a heartbeat (§5.2).
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct AppendEntriesRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -55,7 +55,7 @@ pub struct AppendEntriesRequest {
   pub entries: ::std::vec::Vec<ClientRequest>,
 }
 /// The response to an AppendEntriesRequest
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct AppendEntriesResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -65,7 +65,7 @@ pub struct AppendEntriesResponse {
   pub conflict_opt: ::std::option::Option<ConflictOpt>,
 }
 /// A struct used to implement the conflicting term optimization outlined in §5.3 for log replication.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct ConflictOpt {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -73,7 +73,7 @@ pub struct ConflictOpt {
   pub index: u64,
 }
 /// A request by the Raft leader to send chunks of a snapshot to a follower (§7).
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct InstallSnapshotRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -91,13 +91,13 @@ pub struct InstallSnapshotRequest {
   pub done: bool,
 }
 /// The response to an InstallSnapshotRequest.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct InstallSnapshotResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
 }
 /// A request sent by candidates to gather votes (§5.2).
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct VoteRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -109,7 +109,7 @@ pub struct VoteRequest {
   pub last_log_term: u64,
 }
 /// The response to a VoteRequest.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
 pub struct VoteResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
