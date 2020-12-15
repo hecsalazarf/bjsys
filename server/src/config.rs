@@ -34,7 +34,7 @@ impl Config {
     self.log_filter
   }
 
-  pub fn is_cluster(&self) -> bool {
+  pub fn _is_cluster(&self) -> bool {
     self.cluster_enabled
   }
 
