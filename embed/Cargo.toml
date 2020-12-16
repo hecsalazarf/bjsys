@@ -1,0 +1,12 @@
+[package]
+name = "embed"
+version = "0.1.0"
+description = "Embedded dictionary based on sled"
+authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
+edition = "2018"
+
+[dependencies]
+sled = "0.34.6"
+
+[dev-dependencies]
+tokio = { version = "0.2.24", features = ["rt-core", "macros", "time",] }
