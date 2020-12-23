@@ -1,2 +1,2 @@
 pub mod list;
-pub mod hash;
+pub mod tree_ext;
