@@ -1,11 +1,13 @@
 //! A queue with persitent storage.
 use crate::tree_ext::TreeExt;
 use sled::transaction::{abort, TransactionResult as Result, Transactional};
-use sled::{Db, Error, IVec, Result as SledRes, Tree};
-use std::iter::DoubleEndedIterator;
+use sled::{Db, Error, IVec, Iter, Tree};
+use std::iter::{DoubleEndedIterator, Iterator};
+use std::result::Result as StdResult;
 
 #[derive(Clone)]
 struct QueueKeys {
+  // TODO: Comment fields
   head: IVec,
   tail: IVec,
   queue: IVec,
@@ -112,8 +114,8 @@ impl Queue {
   }
 
   /// Create a double-ended iterator over the elements of the queue.
-  pub fn iter(&self) -> impl DoubleEndedIterator<Item = SledRes<IVec>> {
-    self.elements.iter().values()
+  pub fn iter(&self) -> QueueIter {
+    QueueIter(self.elements.iter())
   }
 
   /// Return the number of elements in this queue.
@@ -148,6 +150,32 @@ impl Queue {
       }
     }
   } */
+}
+
+pub struct QueueIter(Iter);
+
+impl Iterator for QueueIter {
+  type Item = Result<IVec>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    self.0.next().map(map_iter)
+  }
+
+  fn last(self) -> Option<Self::Item> {
+    self.0.last().map(map_iter)
+  }
+}
+
+impl DoubleEndedIterator for QueueIter {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    self.0.next_back().map(map_iter)
+  }
+}
+
+fn map_iter(res: StdResult<(IVec, IVec), Error>) -> Result<IVec> {
+  res
+    .map(|(_, value)| value)
+    .map_err(|err| err.into())
 }
 
 #[cfg(test)]
