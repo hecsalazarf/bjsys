@@ -107,6 +107,22 @@ impl Queue {
     })
   }
 
+  /// Pop one element from the queue's head or wait until one is available.
+  pub async fn bpop(&self) -> Result<IVec, Error> {
+    use sled::Event;
+
+    if let Some(value) = self.pop()? {
+      return Ok(value);
+    }
+    let mut subscriber = self.elements.watch_prefix(vec![]);
+
+    loop {
+      if let Some(Event::Insert { key: _, value }) = (&mut subscriber).await {
+        return Ok(value);
+      }
+    }
+  }
+
   /// Clear the whole queue.
   pub fn clear(&self) -> Result<()> {
     self.elements.clear()?;
@@ -130,26 +146,6 @@ impl Queue {
       Ok(())
     })
   }
-
-  /* fn wait_insert(&self) -> IVec {
-    let mut subscriber = self.elements.watch_prefix(vec![]);
-    loop {
-      // There might be remove events in which case, we block again
-      if let Some(Event::Insert { key: _, value }) = subscriber.next() {
-        return value;
-      }
-    }
-  }
-
-  async fn wait_insert_async(&self) -> IVec {
-    let mut subscriber = self.elements.watch_prefix(vec![]);
-    loop {
-      // There might be remove events in which case, we block again
-      if let Some(Event::Insert { key: _, value }) = (&mut subscriber).await {
-        return value;
-      }
-    }
-  } */
 }
 
 pub struct QueueIter(Iter);
@@ -173,9 +169,7 @@ impl DoubleEndedIterator for QueueIter {
 }
 
 fn map_iter(res: StdResult<(IVec, IVec), Error>) -> Result<IVec> {
-  res
-    .map(|(_, value)| value)
-    .map_err(|err| err.into())
+  res.map(|(_, value)| value).map_err(|err| err.into())
 }
 
 #[cfg(test)]
@@ -216,31 +210,16 @@ mod tests {
     assert_eq!(Ok(Some(IVec::from("Y"))), queue.pop());
   }
 
-  /* #[test]
-  fn queue_bpop() {
-    let queue = new_queue();
-    let list_2 = queue.clone();
-    std::thread::spawn(move || {
-      std::thread::sleep(std::time::Duration::from_secs(1));
-      list_2.rpush("Y").unwrap();
-    });
-
-    // Blocking
-    println!("Blocking for 1 sec");
-    assert_eq!(Ok(IVec::from("Y")), queue.blpop());
-  }
-
   #[tokio::test]
-  async fn queue_bpop_async() {
-    let queue = new_queue();
-    let list_2 = queue.clone();
+  async fn queue_bpop() {
+    let queue_1 = new_queue();
+    let queue_2 = queue_1.clone();
     tokio::spawn(async move {
       tokio::time::delay_for(tokio::time::Duration::from_secs(1)).await;
-      list_2.rpush("Z").unwrap();
+      queue_2.push("Z").unwrap();
     });
 
-    // Non-blocking
-    println!("Waiting for 1 secs");
-    assert_eq!(Ok(IVec::from("Z")), queue.brpop_async().await);
-  } */
+    println!("Waiting for 1 sec");
+    assert_eq!(Ok(IVec::from("Z")), queue_1.bpop().await);
+  }
 }
