@@ -50,27 +50,55 @@ impl SortedSet {
   where
     R: RangeBounds<u64>,
   {
-    let start = self.score_range(range.start_bound());
-    let end = self.score_range(range.end_bound());
-    (start, end)
-  }
+    let mut bound = self.uuid.to_vec();
+    let start = match range.start_bound() {
+      Bound::Excluded(score) => {
+        bound.extend(&score.to_be_bytes());
+        Bound::Excluded(bound)
+      }
+      Bound::Included(score) => {
+        bound.extend(&score.to_be_bytes());
+        Bound::Included(bound)
+      }
+      Bound::Unbounded => {
+        let score = u64::MIN.to_be_bytes();
+        bound.extend(&score);
+        Bound::Included(bound)
+      }
+    };
 
-  fn score_range(&self, bound: Bound<&u64>) -> Bound<Vec<u8>> {
-    let mut bounded = Vec::<u8>::new();
-    bounded.extend(self.uuid.as_ref());
-    match bound {
-      Bound::Excluded(b) => {
-        let score = b.to_be_bytes();
-        bounded.extend(&score[..]);
-        Bound::Excluded(bounded)
+    let mut bound = self.uuid.to_vec();
+    let end = match range.end_bound() {
+      Bound::Excluded(score) => {
+        bound.extend(&score.to_be_bytes());
+        Bound::Excluded(bound)
       }
-      Bound::Included(b) => {
-        let score = b.to_be_bytes();
-        bounded.extend(&score[..]);
-        Bound::Included(bounded)
+      Bound::Included(score) => {
+        if let Some(s) = score.checked_add(1) {
+          bound.extend(&s.to_be_bytes());
+          Bound::Included(bound)
+        } else {
+          let last = bound.as_mut_slice().last_mut().unwrap();
+          if let Some(l) = last.checked_add(1) {
+            *last = l;
+            Bound::Included(bound)
+          } else {
+            Bound::Unbounded
+          }
+        }
       }
-      Bound::Unbounded => Bound::Unbounded,
-    }
+      Bound::Unbounded => {
+        let last = bound.as_mut_slice().last_mut().unwrap();
+        if let Some(l) = last.checked_add(1) {
+          *last = l;
+          Bound::Included(bound)
+        } else {
+          Bound::Unbounded
+        }
+      }
+    };
+
+    (start, end)
   }
 }
 
@@ -109,11 +137,12 @@ mod tests {
     set.add(100, "Elephant").unwrap();
     set.add(50, "Bear").unwrap();
     set.add(20, "Cat").unwrap();
+    set.add(101, "Bigger Elephant").unwrap();
 
-    // FIX: We should not add one to get the upper bound element
-    let mut range = set.range_by_score(20..=101);
+    let mut range = set.range_by_score(20..=100);
     assert_eq!(range.next(), Some(Ok(IVec::from("Cat"))));
     assert_eq!(range.next(), Some(Ok(IVec::from("Bear"))));
     assert_eq!(range.next(), Some(Ok(IVec::from("Elephant"))));
+    assert_eq!(range.next(), None);
   }
 }
