@@ -132,17 +132,40 @@ mod tests {
   #[test]
   fn sorted_set_range_by_score() {
     let db = sled::Config::new().temporary(true).open().unwrap();
-    let set = SortedSet::open(&db, "set_a").unwrap();
+    let set_a = SortedSet::open(&db, "set_a").unwrap();
+    let set_b = SortedSet::open(&db, "set_b").unwrap();
 
-    set.add(100, "Elephant").unwrap();
-    set.add(50, "Bear").unwrap();
-    set.add(20, "Cat").unwrap();
-    set.add(101, "Bigger Elephant").unwrap();
+    // Add to first set
+    set_a.add(100, "Elephant").unwrap();
+    set_a.add(50, "Bear").unwrap();
+    set_a.add(20, "Cat").unwrap();
+    set_a.add(u64::MAX, "Bigger Elephant").unwrap();
 
-    let mut range = set.range_by_score(20..=100);
+    // Add to second set
+    set_b.add(100, "Truck").unwrap();
+    set_b.add(50, "Sedan").unwrap();
+
+    // Get a subset
+    let mut range = set_a.range_by_score(20..=50);
     assert_eq!(range.next(), Some(Ok(IVec::from("Cat"))));
     assert_eq!(range.next(), Some(Ok(IVec::from("Bear"))));
+    assert_eq!(range.next(), None);
+
+    // Exclude last member
+    let mut range = set_a.range_by_score(100..u64::MAX);
     assert_eq!(range.next(), Some(Ok(IVec::from("Elephant"))));
+    assert_eq!(range.next(), None);
+
+    // Include last member
+    let mut range = set_a.range_by_score(100..=u64::MAX);
+    assert_eq!(range.next(), Some(Ok(IVec::from("Elephant"))));
+    assert_eq!(range.next(), Some(Ok(IVec::from("Bigger Elephant"))));
+    assert_eq!(range.next(), None);
+
+    // Get all members with an unbounded range
+    let mut range = set_b.range_by_score(..);
+    assert_eq!(range.next(), Some(Ok(IVec::from("Sedan"))));
+    assert_eq!(range.next(), Some(Ok(IVec::from("Truck"))));
     assert_eq!(range.next(), None);
   }
 }
