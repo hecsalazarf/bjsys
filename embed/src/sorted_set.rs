@@ -20,15 +20,20 @@ pub struct SortedSet {
 }
 
 impl SortedSet {
-  const PREFIX_LEN: usize = 24;
+  /// Prefix length of skiplist.
+  const SKIPLIST_PREFIX_LEN: usize = 24;
+  /// Skiplist tree name.
+  const SKIPLIST_TREE_NAME: &'static str = "__sorted_set_skiplist";
+  /// Members tree name.
+  const MEMBERS_TREE_NAME: &'static str = "__sorted_set_members";
 
   /// Open the sorted set with the specified key.
   pub fn open<K>(db: &Db, key: K) -> Result<Self>
   where
     K: AsRef<[u8]>,
   {
-    let skiplist = db.open_tree("__sorted_set_skiplist")?;
-    let members = db.open_tree("__sorted_set_members")?;
+    let skiplist = db.open_tree(Self::SKIPLIST_TREE_NAME)?;
+    let members = db.open_tree(Self::MEMBERS_TREE_NAME)?;
     let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref())
       .as_bytes()
       .into();
@@ -71,6 +76,26 @@ impl SortedSet {
   {
     let bytes_range = self.to_bytes_range(range);
     self.skiplist.range(bytes_range).into()
+  }
+
+  /// Remove the specified member from the sorted set, returning `true` when
+  /// the member existed and was removed. If member is non-existant the result
+  /// is `false`.
+  pub fn remove<M>(&self, member: M) -> Result<bool>
+  where
+    M: AsRef<[u8]>,
+  {
+    let tx_group = (&self.skiplist, &self.members);
+    tx_group.transaction(|(skiplist, members)| {
+      let encoded_member = self.encode_members_key(member.as_ref());
+      if let Some(score) = members.remove(encoded_member)? {
+        let encoded_key = self.encode_skiplist_key(score.as_ref(), member.as_ref());
+        skiplist.remove(encoded_key)?;
+        Ok(true)
+      } else {
+        Ok(false)
+      }
+    })
   }
 
   fn encode_skiplist_key(&self, score: &[u8], member: &[u8]) -> Vec<u8> {
@@ -168,7 +193,12 @@ impl Iterator for RangeSet {
     self.inner.next().map(|res| {
       // Extract member from the key
       res
-        .map(|(key, _)| key.subslice(SortedSet::PREFIX_LEN, key.len() - SortedSet::PREFIX_LEN))
+        .map(|(key, _)| {
+          key.subslice(
+            SortedSet::SKIPLIST_PREFIX_LEN,
+            key.len() - SortedSet::SKIPLIST_PREFIX_LEN,
+          )
+        })
         .map_err(|e| e.into())
     })
   }
@@ -231,5 +261,16 @@ mod tests {
     assert_eq!(range.next(), Some(Ok(IVec::from("Elephant"))));
     assert_eq!(range.next(), None);
     assert_eq!(set_a.members.len(), 1);
+  }
+
+  #[test]
+  fn sorted_set_remove_member() {
+    let db = sled::Config::new().temporary(true).open().unwrap();
+    let set_a = SortedSet::open(&db, "set_a").unwrap();
+    set_a.add(2000, "Elephant").unwrap();
+
+    assert_eq!(Ok(true), set_a.remove("Elephant"));
+    assert!(set_a.members.is_empty());
+    assert!(set_a.skiplist.is_empty());
   }
 }
