@@ -19,7 +19,11 @@ pub struct SortedSet {
   uuid: IVec,
 }
 
+type BoundLimit = [u8; SortedSet::SKIPLIST_PREFIX_LEN];
+
 impl SortedSet {
+  /// UUID length.
+  const UUID_LEN: usize = 16;
   /// Prefix length of skiplist.
   const SKIPLIST_PREFIX_LEN: usize = 24;
   /// Skiplist tree name.
@@ -111,67 +115,81 @@ impl SortedSet {
     key
   }
 
-  fn to_bytes_range<R>(&self, range: R) -> (Bound<Vec<u8>>, Bound<Vec<u8>>)
+  fn to_bytes_range<R>(&self, range: R) -> (Bound<BoundLimit>, Bound<BoundLimit>)
   where
     R: RangeBounds<u64>,
   {
-    let mut bound = self.uuid.to_vec();
+    let uuid_slice = self.uuid.as_ref();
     let start = match range.start_bound() {
       Bound::Excluded(score) => {
-        bound.extend(&score.to_be_bytes());
+        let bound = Self::create_bound_limit(uuid_slice, score);
         Bound::Excluded(bound)
       }
       Bound::Included(score) => {
-        bound.extend(&score.to_be_bytes());
+        let bound = Self::create_bound_limit(uuid_slice, score);
         Bound::Included(bound)
       }
       Bound::Unbounded => {
         // Unbounded start has zeroed score
-        let score = u64::MIN.to_be_bytes();
-        bound.extend(&score);
+        let bound = Self::create_bound_limit(uuid_slice, &u64::MIN);
         Bound::Included(bound)
       }
     };
 
-    let mut bound = self.uuid.to_vec();
     let end = match range.end_bound() {
       Bound::Excluded(score) => {
-        bound.extend(&score.to_be_bytes());
+        let bound = Self::create_bound_limit(uuid_slice, score);
         Bound::Excluded(bound)
       }
       Bound::Included(score) => {
         // We add one to an included score, so that the last member is included
         // in the returned iterator
         if let Some(s) = score.checked_add(1) {
-          bound.extend(&s.to_be_bytes());
+          let bound = Self::create_bound_limit(uuid_slice, &s);
           Bound::Included(bound)
         } else {
           // However, the max score can overflow. Such case requires to increment
-          // the UUID to cover the whole set.
-          // Only the last byte of the UUID is incremented.
-          let last = bound.as_mut_slice().last_mut().unwrap();
-          if let Some(l) = last.checked_add(1) {
-            *last = l;
-            Bound::Included(bound)
-          } else {
-            // But even the UUID can overflow, meaning we reached the sorted set max
-            // UUID. Very improbable scenario, but theoretically posible. Just in case
-            Bound::Unbounded
-          }
+          // the UUID to cover the whole set
+          self.create_unbounded_limit()
         }
       }
-      Bound::Unbounded => {
-        let last = bound.as_mut_slice().last_mut().unwrap();
-        if let Some(l) = last.checked_add(1) {
-          *last = l;
-          Bound::Included(bound)
-        } else {
-          Bound::Unbounded
-        }
-      }
+      Bound::Unbounded => self.create_unbounded_limit(),
     };
 
     (start, end)
+  }
+
+  fn create_unbounded_limit(&self) -> Bound<BoundLimit> {
+    use std::convert::TryInto;
+
+    // Copy the uuid to increment the last byte only
+    let mut uuid: [u8; Self::UUID_LEN] = self.uuid.as_ref().try_into().expect("uuid into array");
+    let last = uuid.last_mut().unwrap();
+    if let Some(l) = last.checked_add(1) {
+      *last = l;
+      let bound = Self::create_bound_limit(&uuid, &u64::MIN);
+      Bound::Included(bound)
+    } else {
+      // But even the UUID can overflow, meaning we reached the sorted set max
+      // UUID. Very improbable scenario, but theoretically posible. Just in case
+      Bound::Unbounded
+    }
+  }
+
+  fn create_bound_limit(uuid: &[u8], score: &u64) -> BoundLimit {
+    use std::convert::TryInto;
+
+    let uuid_slice: &[u8; Self::UUID_LEN] = uuid.try_into().expect("uuid into array");
+    let score_bytes = score.to_be_bytes();
+    // Chain uuid with score
+    let chain = uuid_slice.iter().chain(&score_bytes);
+    let mut limit = [0; Self::SKIPLIST_PREFIX_LEN];
+    // Copy chain to the limit array
+    limit
+      .iter_mut()
+      .zip(chain)
+      .for_each(|(new, chained)| *new = *chained);
+    limit
   }
 }
 
