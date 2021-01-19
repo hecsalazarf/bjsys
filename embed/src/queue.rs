@@ -4,21 +4,30 @@ use sled::transaction::{abort, TransactionResult as Result, Transactional};
 use sled::{Db, Error, IVec, Iter, Tree};
 use std::iter::{DoubleEndedIterator, Iterator};
 use std::result::Result as StdResult;
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct QueueKeys {
-  // TODO: Comment fields
+  /// Queue's head.
   head: IVec,
+  /// Queue's tail.
   tail: IVec,
-  queue: IVec,
 }
 
 impl QueueKeys {
-  fn new(key: &str) -> Self {
-    let head = IVec::from(format!("{}_h", key).into_bytes());
-    let tail = IVec::from(format!("{}_t", key).into_bytes());
-    let queue = IVec::from(format!("__queue_{}", key).into_bytes());
-    Self { head, tail, queue }
+  const HEAD_SUFFIX: &'static [u8] = &[0];
+  const TAIL_SUFFIX: &'static [u8] = &[1];
+
+  fn new(uuid: &[u8]) -> Self {
+    let mut head = uuid.to_vec();
+    head.extend(Self::HEAD_SUFFIX);
+    let mut tail = uuid.to_vec();
+    tail.extend(Self::TAIL_SUFFIX);
+
+    Self {
+      head: head.into(),
+      tail: tail.into(),
+    }
   }
 }
 
@@ -36,8 +45,10 @@ pub struct Queue {
   keys: QueueKeys,
   /// Elements (members)
   elements: Tree,
-  /// Metadata tree, containing the head and tail
+  /// Metadata tree, containing the head and tail values
   meta: Tree,
+  /// UUID
+  uuid: IVec,
 }
 
 impl Queue {
@@ -47,16 +58,27 @@ impl Queue {
   const INIT_TAIL: &'static [u8] = &[255, 255, 255, 255, 255, 255, 255, 255];
   /// Min pointer of queue, meaning the pointer got wrapped.
   const WRAP_PTR: &'static [u8] = &[128, 0, 0, 0, 0, 0, 0, 0];
+  /// Meta tree name.
+  const META_TREE_NAME: &'static str = "__queue_meta";
+  /// Elements tree name.
+  const ELEMENTS_TREE_NAME: &'static str = "__queue_elements";
 
   /// Open a queue with the provided key.
-  pub fn open(db: &Db, key: &str) -> Result<Self> {
-    let keys = QueueKeys::new(key);
-    let elements = db.open_tree(&keys.queue)?;
-    let meta = db.open_tree("__lists_meta")?;
+  pub fn open<K>(db: &Db, key: K) -> Result<Self>
+  where
+    K: AsRef<[u8]>,
+  {
+    let elements = db.open_tree(Self::ELEMENTS_TREE_NAME)?;
+    let meta = db.open_tree(Self::META_TREE_NAME)?;
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref())
+      .as_bytes()
+      .into();
+    let keys = QueueKeys::new(key.as_ref());
     let queue = Self {
       keys,
       elements,
       meta,
+      uuid,
     };
 
     if queue.meta.get(&queue.keys.head)?.is_none() {
@@ -81,8 +103,8 @@ impl Queue {
         // Abort transaction if full
         return abort(Error::Unsupported("Full queue".into()));
       }
-
-      elements.insert(next_tail, val.as_ref())?;
+      let encoded_key = self.encode_members_key(next_tail.as_ref());
+      elements.insert(&encoded_key, val.as_ref())?;
       Ok(())
     })
   }
@@ -93,10 +115,11 @@ impl Queue {
     tx_group.transaction(|(meta, elements)| {
       let head = meta.get(&self.keys.head)?.unwrap();
       // Pop element from the head
-      let el = elements.remove(&head)?;
+      let encoded_key = self.encode_members_key(&head);
+      let el = elements.remove(&encoded_key)?;
 
       if el.is_some() {
-        // If queue has some element, incremebt the head pointer
+        // If queue has some element, increment the head pointer
         let next_head = meta.incr_by(&self.keys.head, 1)?;
         if next_head.as_ref() == Self::WRAP_PTR {
           // Set head to zero when reached the max value
@@ -114,7 +137,7 @@ impl Queue {
     if let Some(value) = self.pop()? {
       return Ok(value);
     }
-    let mut subscriber = self.elements.watch_prefix(vec![]);
+    let mut subscriber = self.elements.watch_prefix(&self.uuid);
 
     loop {
       if let Some(Event::Insert { key: _, value }) = (&mut subscriber).await {
@@ -140,11 +163,21 @@ impl Queue {
   }
 
   fn init_meta(&self) -> Result<()> {
-    (&self.meta).transaction(|meta| {
-      meta.insert(&self.keys.head, Self::ZERO_PTR)?;
-      meta.insert(&self.keys.tail, Self::INIT_TAIL)?;
-      Ok(())
-    })
+    self.meta.insert_many(&[
+      (&self.keys.head, Self::ZERO_PTR),
+      (&self.keys.tail, Self::INIT_TAIL),
+    ])?;
+    Ok(())
+  }
+
+  fn encode_members_key(&self, index: &[u8]) -> [u8; 24] {
+    let chain = self.uuid.iter().chain(index);
+    let mut key = [0; 24];
+    key
+      .iter_mut()
+      .zip(chain)
+      .for_each(|(new, chained)| *new = *chained);
+    key
   }
 }
 
