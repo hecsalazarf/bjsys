@@ -1,15 +1,16 @@
 /// Client Request
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct ClientRequest {
   #[prost(string, tag = "1")]
-  pub client: std::string::String,
+  pub client: ::prost::alloc::string::String,
   #[prost(uint64, tag = "2")]
   pub serial: u64,
   #[prost(oneof = "client_request::Request", tags = "3, 4, 5")]
-  pub request: ::std::option::Option<client_request::Request>,
+  pub request: ::core::option::Option<client_request::Request>,
 }
+/// Nested message and enum types in `ClientRequest`.
 pub mod client_request {
-  #[derive(Clone, PartialEq, ::prost::Oneof, ::serde::Serialize, ::serde::Deserialize)]
+  #[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Oneof)]
   pub enum Request {
     #[prost(message, tag = "3")]
     Create(super::super::msg::CreateRequest),
@@ -20,15 +21,16 @@ pub mod client_request {
   }
 }
 /// Client Response
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct ClientResponse {
   #[prost(uint64, tag = "1")]
   pub serial: u64,
   #[prost(oneof = "client_response::Response", tags = "3, 4, 5")]
-  pub response: ::std::option::Option<client_response::Response>,
+  pub response: ::core::option::Option<client_response::Response>,
 }
+/// Nested message and enum types in `ClientResponse`.
 pub mod client_response {
-  #[derive(Clone, PartialEq, ::prost::Oneof, ::serde::Serialize, ::serde::Deserialize)]
+  #[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Oneof)]
   pub enum Response {
     #[prost(message, tag = "3")]
     Create(super::super::msg::CreateResponse),
@@ -39,7 +41,7 @@ pub mod client_response {
   }
 }
 /// An RPC sent by a cluster leader to replicate log entries (§5.3), and as a heartbeat (§5.2).
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AppendEntriesRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -52,20 +54,20 @@ pub struct AppendEntriesRequest {
   #[prost(uint64, tag = "5")]
   pub leader_commit: u64,
   #[prost(message, repeated, tag = "6")]
-  pub entries: ::std::vec::Vec<ClientRequest>,
+  pub entries: ::prost::alloc::vec::Vec<ClientRequest>,
 }
 /// The response to an AppendEntriesRequest
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AppendEntriesResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
   #[prost(bool, tag = "2")]
   pub success: bool,
   #[prost(message, optional, tag = "3")]
-  pub conflict_opt: ::std::option::Option<ConflictOpt>,
+  pub conflict_opt: ::core::option::Option<ConflictOpt>,
 }
 /// A struct used to implement the conflicting term optimization outlined in §5.3 for log replication.
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct ConflictOpt {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -73,7 +75,7 @@ pub struct ConflictOpt {
   pub index: u64,
 }
 /// A request by the Raft leader to send chunks of a snapshot to a follower (§7).
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct InstallSnapshotRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -85,19 +87,19 @@ pub struct InstallSnapshotRequest {
   pub last_included_term: u64,
   #[prost(uint64, tag = "5")]
   pub offset: u64,
-  #[prost(bytes, tag = "6")]
-  pub data: std::vec::Vec<u8>,
+  #[prost(bytes = "vec", tag = "6")]
+  pub data: ::prost::alloc::vec::Vec<u8>,
   #[prost(bool, tag = "7")]
   pub done: bool,
 }
 /// The response to an InstallSnapshotRequest.
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct InstallSnapshotResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
 }
 /// A request sent by candidates to gather votes (§5.2).
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct VoteRequest {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -109,7 +111,7 @@ pub struct VoteRequest {
   pub last_log_term: u64,
 }
 /// The response to a VoteRequest.
-#[derive(Clone, PartialEq, ::prost::Message, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct VoteResponse {
   #[prost(uint64, tag = "1")]
   pub term: u64,
@@ -362,6 +364,7 @@ pub mod raft_network_server {
             http::Response::builder()
               .status(200)
               .header("grpc-status", "12")
+              .header("content-type", "application/grpc")
               .body(tonic::body::BoxBody::empty())
               .unwrap(),
           )

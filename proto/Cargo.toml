@@ -11,10 +11,10 @@ client = []
 server = []
 
 [dependencies]
-prost = "0.6.1"
-tonic = "0.3.1"
+prost = "0.7.0"
+tonic = "0.4.0"
 validator = "0.11.0"
 serde = { version = "1.0.115", default-features = false, features = ["serde_derive"] }
 
 [build-dependencies]
-tonic-build = "0.3.1"
+tonic-build = "0.4.0"
