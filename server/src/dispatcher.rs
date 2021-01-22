@@ -8,10 +8,8 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::Context;
-use tokio::{
-  stream::Stream,
-  sync::{mpsc, Notify},
-};
+use tokio::sync::{mpsc, Notify};
+use tokio_stream::Stream;
 use tonic::Status;
 use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
@@ -198,7 +196,7 @@ impl Dispatcher {
     if let Some(task) = consumer.pending_task {
       task.finish();
     }
-    consumer.exit.notify();
+    consumer.exit.notify_one();
 
     self.consumers.len()
   }
@@ -209,7 +207,7 @@ impl Dispatcher {
       if let Some(task) = consumer.pending_task {
         task.finish();
       }
-      consumer.exit.notify();
+      consumer.exit.notify_one();
     }
   }
 
@@ -423,7 +421,7 @@ impl Consumer {
             }
           }
         }
-        _ = self.exit.notified() => {
+        _ = self.tx.closed() => {
           break;
         }
       };

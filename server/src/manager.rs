@@ -85,7 +85,7 @@ impl ManagerWorker {
             request.task_id, request.status
           );
           if let Some(n) = self.tasks.remove(&request.task_id) {
-            n.notify();
+            n.notify_one();
           }
         }
         Ok(())
@@ -148,7 +148,7 @@ impl WaitingTask {
   }
 
   pub fn finish(self) {
-    self.notify.notify();
+    self.notify.notify_one();
     self
       .worker
       .send(AckCmd::Remove(self.id))
