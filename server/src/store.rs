@@ -356,7 +356,7 @@ fn backoff_time(count: u64) -> u64 {
   const POWER: u32 = 4;
 
   let mut rng = rand::thread_rng();
-  let rnd = rng.gen_range(1, 31);
+  let rnd = rng.gen_range(1..=30);
 
   // Multiplied by 1000 to obtain milliseconds
   (15 + count.pow(POWER) + (rnd * (count + 1))) * 1000
