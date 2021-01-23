@@ -8,6 +8,8 @@ edition = "2018"
 [dependencies]
 sled = "0.34.6"
 uuid = { version = "0.8.2", features = ["v5"] }
+lmdb-rkv = "0.14.0"
 
 [dev-dependencies]
 tokio = { version = "0.2.24", features = ["rt-core", "macros", "time",] }
+tempfile = "3.2.0"
