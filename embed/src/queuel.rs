@@ -1,5 +1,5 @@
 //! A queue with persitent storage.
-use crate::txn_ext::TransactionExt;
+use crate::extension::TransactionExt;
 use lmdb::{
   Cursor, Database, DatabaseFlags, Environment, Error, Iter, Result, RwTransaction, WriteFlags,
 };
@@ -21,7 +21,7 @@ impl QueueKeys {
     let uuid_bytes = uuid.as_bytes();
     let tail = Self::create_key(uuid_bytes, Self::TAIL_SUFFIX);
 
-    Self {tail}
+    Self { tail }
   }
 
   fn create_key(uuid: &[u8; 16], suffix: &[u8]) -> MetaKey {
@@ -80,7 +80,7 @@ impl Queue {
     let keys = QueueKeys::new(&uuid);
 
     let tx = env.begin_ro_txn()?;
-    if tx.get(elements, &keys.tail)?.is_none() {
+    if tx.get_opt(elements, &keys.tail)?.is_none() {
       use lmdb::Transaction;
       let mut tx = env.begin_rw_txn()?;
       let flags = WriteFlags::default();
@@ -100,7 +100,7 @@ impl Queue {
   pub fn push<V: AsRef<[u8]>>(&self, txn: &mut RwTransaction, val: V) -> Result<()> {
     let write_flags = WriteFlags::default();
 
-    let opt_tail = txn.get(self.meta, &self.keys.tail)?;
+    let opt_tail = txn.get_opt(self.meta, &self.keys.tail)?;
 
     let mut next_tail = incr_slice(opt_tail, 1)?;
 
@@ -112,12 +112,12 @@ impl Queue {
       txn.put(self.meta, &self.keys.tail, &next_tail, write_flags)?;
     }
 
-    if txn.get(self.elements, next_tail)?.is_some() {
+    let encoded_key = self.encode_members_key(&next_tail);
+    if txn.get_opt(self.elements, encoded_key)?.is_some() {
       // Error if full, transaction must abort
       return Err(Error::KeyExist);
     }
 
-    let encoded_key = self.encode_members_key(&next_tail);
     txn.put(self.elements, &encoded_key, &val, write_flags)
   }
 
@@ -136,14 +136,14 @@ impl Queue {
   }
 
   /// Create an iterator over the elements of the queue.
-  pub fn iter<T>(&self, txn: &T) -> Result<QueueIter>
+  pub fn iter<'txn, T>(&self, txn: &'txn T) -> Result<QueueIter<'txn>>
   where
     T: lmdb::Transaction,
   {
     let mut cursor = txn.open_ro_cursor(self.elements)?;
     Ok(QueueIter {
       iter: cursor.iter_from(self.uuid.as_bytes()),
-      uuid: self.uuid.clone(),
+      uuid: self.uuid,
     })
   }
 
