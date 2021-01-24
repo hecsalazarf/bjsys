@@ -1,8 +1,6 @@
 //! A queue with persitent storage.
 use crate::extension::TransactionExt;
-use lmdb::{
-  Cursor, Database, DatabaseFlags, Environment, Error, Iter, Result, RwTransaction, WriteFlags,
-};
+use lmdb::{Cursor, Database, Environment, Error, Iter, Result, RwTransaction, WriteFlags};
 use uuid::Uuid;
 
 type MetaKey = [u8; 17];
@@ -73,7 +71,7 @@ impl Queue {
   where
     K: AsRef<[u8]>,
   {
-    let db_flags = DatabaseFlags::default();
+    let db_flags = lmdb::DatabaseFlags::default();
     let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
     let meta = env.create_db(Some(Self::META_DB_NAME), db_flags)?;
     let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
@@ -135,16 +133,49 @@ impl Queue {
     Ok(opt_pop.map(|(_, val)| val))
   }
 
+  /// Remove the first `count` elements equal to `val` from the queue.
+  pub fn remove<V>(&self, txn: &mut RwTransaction, count: usize, val: V) -> Result<usize>
+  where
+    V: AsRef<[u8]>,
+  {
+    let iter = self.scan(txn)?;
+    let val = val.as_ref();
+    let mut removed = 0;
+
+    for i in iter {
+      let (key, value) = i?;
+      if val == value {
+        txn.del(self.elements, &key, None)?;
+        removed += 1;
+        if removed == count {
+          break;
+        }
+      }
+    }
+    Ok(removed)
+  }
+
   /// Create an iterator over the elements of the queue.
   pub fn iter<'txn, T>(&self, txn: &'txn T) -> Result<QueueIter<'txn>>
   where
     T: lmdb::Transaction,
   {
+    let inner = self.scan(txn)?;
+    Ok(QueueIter { inner })
+  }
+
+  /// Scan over all the elements in this queue.
+  fn scan<'txn, T>(&self, txn: &'txn T) -> Result<InnerIter<'txn>>
+  where
+    T: lmdb::Transaction,
+  {
     let mut cursor = txn.open_ro_cursor(self.elements)?;
-    Ok(QueueIter {
+    let inner = InnerIter {
       iter: cursor.iter_from(self.uuid.as_bytes()),
       uuid: self.uuid,
-    })
+    };
+
+    Ok(inner)
   }
 
   fn encode_members_key(&self, index: &[u8]) -> ElementKey {
@@ -173,13 +204,13 @@ fn incr_slice(slice: Option<&[u8]>, incr: i64) -> Result<[u8; 8]> {
   }
 }
 
-pub struct QueueIter<'txn> {
+struct InnerIter<'txn> {
   iter: Iter<'txn>,
   uuid: Uuid,
 }
 
-impl<'txn> Iterator for QueueIter<'txn> {
-  type Item = Result<&'txn [u8]>;
+impl<'txn> Iterator for InnerIter<'txn> {
+  type Item = Result<(&'txn [u8], &'txn [u8])>;
 
   fn next(&mut self) -> Option<Self::Item> {
     let next = self.iter.next();
@@ -196,8 +227,18 @@ impl<'txn> Iterator for QueueIter<'txn> {
     } else {
       next
     }
-    // Return the value only
-    .map(|res| res.map(|(_, val)| val))
+  }
+}
+
+pub struct QueueIter<'txn> {
+  inner: InnerIter<'txn>,
+}
+
+impl<'txn> Iterator for QueueIter<'txn> {
+  type Item = Result<&'txn [u8]>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    self.inner.next().map(|res| res.map(|(_, val)| val))
   }
 }
 
@@ -281,5 +322,26 @@ mod tests {
     let opt_pop = queue.pop(&mut tx).unwrap();
     assert_eq!(None, opt_pop.map(convert_to_str));
     tx.commit().unwrap();
+  }
+
+  #[test]
+  fn queuel_remove() {
+    let (_tmpdir, env) = new_env();
+    let queue = Queue::open(&env, "myqueue").expect("open queue");
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    queue.push(&mut tx, "X").unwrap();
+    queue.push(&mut tx, "X").unwrap();
+    queue.push(&mut tx, "Y").unwrap();
+    tx.commit().unwrap();
+
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    let removed = queue.remove(&mut tx, 2, "X").unwrap();
+    tx.commit().unwrap();
+    assert_eq!(2, removed);
+
+    let tx = env.begin_ro_txn().expect("ro txn");
+    let mut iter = queue.iter(&tx).expect("iter").map(|i| i.unwrap());
+    assert_eq!(Some("Y"), iter.next().map(convert_to_str));
+    assert_eq!(None, iter.next());
   }
 }
