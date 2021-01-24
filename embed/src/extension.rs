@@ -1,9 +1,8 @@
-//! Extension traits for LMDB transactions and cursors.
-use lmdb::{
-  Cursor, Database, Error, Result, RoCursor, RoTransaction, RwCursor, RwTransaction, Transaction,
-};
+//! Automatically-implemented extension traits on `Transaction` and `Cursor`.
+use lmdb::{Cursor, Database, Error, Result, Transaction};
 
-/// Extension trait to add functionality to LMDB transactions.
+/// An automatically-implemented extension trait on `Transaction` providing
+/// convenience methods.
 pub trait TransactionExt: Transaction {
   /// Gets an item from a database, but instead of returning `Error::NotFound`, returns
   /// `None` if the item is not in the database.
@@ -24,12 +23,12 @@ pub trait TransactionExt: Transaction {
   }
 }
 
-impl TransactionExt for RoTransaction<'_> {}
-impl TransactionExt for RwTransaction<'_> {}
+impl<T: Transaction + ?Sized> TransactionExt for T {}
 
 type PairCursor<'txn> = (Option<&'txn [u8]>, Option<&'txn [u8]>);
 
-/// Extension trait to add functionality to LMDB cursors
+/// An automatically-implemented extension trait on `Cursor` providing
+/// convenience methods.
 pub trait CursorExt<'txn>: Cursor<'txn> {
   /// Retrieves a key/data pair from the cursor just as `Cursor::get`, but instead of returning
   /// `Error::NotFound`, returns `(None, None)` if the item is not in the database.
@@ -47,5 +46,4 @@ pub trait CursorExt<'txn>: Cursor<'txn> {
   }
 }
 
-impl<'txn> CursorExt<'txn> for RoCursor<'txn> {}
-impl<'txn> CursorExt<'txn> for RwCursor<'txn> {}
+impl<'txn, C: Cursor<'txn> + ?Sized> CursorExt<'txn> for C {}
