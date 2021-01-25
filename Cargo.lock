@@ -1037,7 +1037,6 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "clap",
- "prost",
  "proto",
  "rand",
  "redis",

@@ -1,4 +1,4 @@
-use proto::MessageValidator;
+use proto::{errors::BadRequest, MessageValidator};
 use tonic::{Code, Request, Status};
 
 pub trait RequestInterceptor {
@@ -18,18 +18,12 @@ impl<T: MessageValidator> RequestInterceptor for Request<T> {
     if errors.is_empty() {
       Ok(())
     } else {
-      use prost::Message;
-      use proto::errors::BadRequest;
-
-      let br = BadRequest::from(errors);
-      let mut buffer = Vec::with_capacity(br.encoded_len());
-      // Never fails as the buffer has sufficient capacity
-      br.encode(&mut buffer).unwrap();
+      let br_bytes = BadRequest::from(errors).into_bytes();
 
       Err(Status::with_details(
         Code::InvalidArgument,
         "Payload is not valid",
-        buffer.into(),
+        br_bytes.into(),
       ))
     }
   }
