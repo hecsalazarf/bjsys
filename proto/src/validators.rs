@@ -1,5 +1,27 @@
 use crate::{AckRequest, CreateRequest, FetchRequest, TaskHash};
-use validator::{HasLen, ValidationError, ValidationErrors, Validator};
+use validator::{HasLen, ValidationError, ValidationErrors};
+
+#[derive(Clone)]
+enum Validator {
+  Range {
+    min: Option<f64>,
+    max: Option<f64>,
+  },
+  Length {
+    min: Option<u64>,
+    max: Option<u64>,
+    equal: Option<u64>,
+  },
+}
+
+impl Validator {
+  pub fn code(&self) -> &'static str {
+    match *self {
+      Validator::Range { .. } => "range",
+      Validator::Length { .. } => "length",
+    }
+  }
+}
 
 struct Defaults;
 
@@ -116,16 +138,15 @@ impl MessageValidator for FetchRequest {
 }
 
 fn validate_length<T: HasLen>(validator: Validator, value: T) -> Result<(), ValidationError> {
-  let length = value.length();
-  if validator::validate_length(validator.clone(), value) {
-    return Ok(());
-  }
-
-  let mut error = ValidationError::new(validator.code());
-  error.message = Some("Length is not valid".into());
-
   match validator {
     Validator::Length { min, max, equal } => {
+      let length = value.length();
+      if validator::validate_length(value, min, max, equal) {
+        return Ok(());
+      }
+
+      let mut error = ValidationError::new(validator.code());
+      error.message = Some("Length is not valid".into());
       if let Some(eq) = equal {
         error.add_param(Params::EQUAL.into(), &eq);
       }
@@ -136,23 +157,21 @@ fn validate_length<T: HasLen>(validator: Validator, value: T) -> Result<(), Vali
         error.add_param(Params::MAX.into(), &m);
       }
       error.add_param(Params::FOUND.into(), &length);
+      Err(error)
     }
     _ => unreachable!(),
   }
-
-  Err(error)
 }
 
 fn validate_range(validator: Validator, value: f64) -> Result<(), ValidationError> {
-  if validator::validate_range(validator.clone(), value) {
-    return Ok(());
-  }
-
-  let mut error = ValidationError::new(validator.code());
-  error.message = Some("Range is not valid".into());
-
   match validator {
     Validator::Range { min, max } => {
+      if validator::validate_range(value, min, max) {
+        return Ok(());
+      }
+
+      let mut error = ValidationError::new(validator.code());
+      error.message = Some("Range is not valid".into());
       if let Some(m) = min {
         error.add_param(Params::MIN.into(), &m);
       }
@@ -160,9 +179,8 @@ fn validate_range(validator: Validator, value: f64) -> Result<(), ValidationErro
         error.add_param(Params::MAX.into(), &m);
       }
       error.add_param(Params::FOUND.into(), &value);
+      Err(error)
     }
     _ => unreachable!(),
   }
-
-  Err(error)
 }
