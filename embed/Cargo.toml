@@ -6,7 +6,6 @@ authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
 edition = "2018"
 
 [dependencies]
-sled = "0.34.6"
 uuid = { version = "0.8.2", features = ["v5"] }
 lmdb-rkv = "0.14.0"
 
