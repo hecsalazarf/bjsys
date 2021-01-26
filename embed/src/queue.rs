@@ -208,38 +208,38 @@ mod tests {
   use lmdb::Transaction;
 
   #[test]
-  fn push() {
-    let (_tmpdir, env) = create_env();
-    let queue = Queue::open(&env, "myqueue").expect("open queue");
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    queue.push(&mut tx, "Y").unwrap();
-    queue.push(&mut tx, "Z").unwrap();
-    queue.push(&mut tx, "X").unwrap();
-    tx.commit().unwrap();
+  fn push() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue = Queue::open(&env, "myqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue.push(&mut tx, "Y")?;
+    queue.push(&mut tx, "Z")?;
+    queue.push(&mut tx, "X")?;
+    tx.commit()?;
 
-    let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue.iter(&tx).expect("iter");
+    let tx = env.begin_ro_txn()?;
+    let mut iter = queue.iter(&tx)?;
     assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
     assert_eq!(Some(Ok("Z")), iter.next().map(utf8_to_str));
     assert_eq!(Some(Ok("X")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next().map(utf8_to_str));
-    tx.commit().unwrap();
+    tx.commit()?;
 
-    let queue2 = Queue::open(&env, "anotherqueue").expect("open queue");
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    queue2.push(&mut tx, "A").unwrap();
-    tx.commit().unwrap();
+    let queue2 = Queue::open(&env, "anotherqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue2.push(&mut tx, "A")?;
+    tx.commit()?;
 
-    let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue2.iter(&tx).expect("iter");
+    let tx = env.begin_ro_txn()?;
+    let mut iter = queue2.iter(&tx)?;
     assert_eq!(Some(Ok("A")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next().map(utf8_to_str));
-    tx.commit().unwrap();
+    tx.commit()
   }
 
   #[test]
   fn push_full_queue() -> Result<()> {
-    let (_tmpdir, env) = create_env();
+    let (_tmpdir, env) = create_env()?;
     let queue = Queue::open(&env, "myqueue")?;
     let mut tx = env.begin_rw_txn()?;
     queue.push(&mut tx, "X")?;
@@ -261,53 +261,54 @@ mod tests {
   }
 
   #[test]
-  fn pop() {
-    let (_tmpdir, env) = create_env();
-    let queue = Queue::open(&env, "myqueue").expect("open queue");
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    queue.push(&mut tx, "Y").unwrap();
-    queue.push(&mut tx, "Z").unwrap();
-    tx.commit().unwrap();
+  fn pop() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue = Queue::open(&env, "myqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue.push(&mut tx, "Y")?;
+    queue.push(&mut tx, "Z")?;
+    tx.commit()?;
 
-    let queue2 = Queue::open(&env, "anotherqueue").expect("open queue");
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    queue2.push(&mut tx, "A").unwrap();
-    tx.commit().unwrap();
+    let queue2 = Queue::open(&env, "anotherqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue2.push(&mut tx, "A")?;
+    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn().expect("rw txn");
+    let mut tx = env.begin_rw_txn()?;
     let opt_pop = queue.pop(&mut tx).transpose();
     assert_eq!(Some(Ok("Y")), opt_pop.map(utf8_to_str));
-    tx.commit().unwrap();
+    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn().expect("rw txn");
+    let mut tx = env.begin_rw_txn()?;
     let opt_pop = queue.pop(&mut tx).transpose();
     assert_eq!(Some(Ok("Z")), opt_pop.map(utf8_to_str));
-    tx.commit().unwrap();
+    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn().expect("rw txn");
+    let mut tx = env.begin_rw_txn()?;
     let opt_pop = queue.pop(&mut tx).transpose();
     assert_eq!(None, opt_pop.map(utf8_to_str));
-    tx.commit().unwrap();
+    tx.commit()
   }
 
   #[test]
-  fn remove() {
-    let (_tmpdir, env) = create_env();
-    let queue = Queue::open(&env, "myqueue").expect("open queue");
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    queue.push(&mut tx, "X").unwrap();
-    queue.push(&mut tx, "X").unwrap();
-    queue.push(&mut tx, "Y").unwrap();
-    tx.commit().unwrap();
+  fn remove() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue = Queue::open(&env, "myqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue.push(&mut tx, "X")?;
+    queue.push(&mut tx, "X")?;
+    queue.push(&mut tx, "Y")?;
+    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    let removed = queue.remove(&mut tx, 2, "X").unwrap();
-    tx.commit().unwrap();
+    let mut tx = env.begin_rw_txn()?;
+    let removed = queue.remove(&mut tx, 2, "X")?;
+    tx.commit()?;
     assert_eq!(2, removed);
 
-    let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue.iter(&tx).expect("iter");
+    let tx = env.begin_ro_txn()?;
+    let mut iter = queue.iter(&tx)?;
     assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next());
+    Ok(())
   }
 }

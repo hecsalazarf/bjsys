@@ -255,41 +255,42 @@ mod tests {
   use lmdb::Cursor;
 
   #[test]
-  fn range_by_score() {
-    let (_tmpdir, env) = create_env();
-    let set_a = SortedSet::open(&env, "set_a").unwrap();
+  fn range_by_score() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_a = SortedSet::open(&env, "set_a")?;
 
     // Add to set
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 100, "Elephant").unwrap();
-    set_a.add(&mut tx, 50, "Bear").unwrap();
-    set_a.add(&mut tx, 20, "Cat").unwrap();
-    set_a.add(&mut tx, 101, "Bigger Elephant").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 100, "Elephant")?;
+    set_a.add(&mut tx, 50, "Bear")?;
+    set_a.add(&mut tx, 20, "Cat")?;
+    set_a.add(&mut tx, 101, "Bigger Elephant")?;
+    tx.commit()?;
 
     // Get a subset
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, 20..=50).unwrap();
+    let mut range = set_a.range_by_score(&tx, 20..=50)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Cat")));
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bear")));
     assert_eq!(range.next().map(utf8_to_str), None);
 
     // Exclude last member
-    let tx = tx.reset().renew().unwrap();
-    let mut range = set_a.range_by_score(&tx, 100..101).unwrap();
+    let tx = tx.reset().renew()?;
+    let mut range = set_a.range_by_score(&tx, 100..101)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next(), None);
 
     // Include last member
-    let tx = tx.reset().renew().unwrap();
-    let mut range = set_a.range_by_score(&tx, 100..=101).unwrap();
+    let tx = tx.reset().renew()?;
+    let mut range = set_a.range_by_score(&tx, 100..=101)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bigger Elephant")));
     assert_eq!(range.next(), None);
+    Ok(())
   }
 
   #[test]
-  fn range_by_score_unbounded() {
+  fn range_by_score_unbounded() -> Result<()> {
     // UUID_A = UUID::MAX - 1
     const UUID_A: [u8; 16] = [
       0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -298,98 +299,102 @@ mod tests {
     // UUID_B = UUID::MAX
     const UUID_B: [u8; 16] = [0xff; 16];
 
-    let (_tmpdir, env) = create_env();
-    let mut set_a = SortedSet::open(&env, "set_a").unwrap();
-    let mut set_b = SortedSet::open(&env, "set_b").unwrap();
+    let (_tmpdir, env) = create_env()?;
+    let mut set_a = SortedSet::open(&env, "set_a")?;
+    let mut set_b = SortedSet::open(&env, "set_b")?;
     // Intentionally change uuid to test edge case
     set_a.uuid = Uuid::from_slice(&UUID_A).unwrap();
     set_b.uuid = Uuid::from_slice(&UUID_B).unwrap();
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 100, "Elephant").unwrap();
-    set_a.add(&mut tx, 50, "Bear").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 100, "Elephant")?;
+    set_a.add(&mut tx, 50, "Bear")?;
+    tx.commit()?;
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_b.add(&mut tx, 10, "Cat").unwrap();
-    tx.commit().unwrap();
+    set_b.add(&mut tx, 10, "Cat")?;
+    tx.commit()?;
 
     // Set A with UUID_A does not overlap with UUID_B
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    let mut range = set_a.range_by_score(&tx, ..)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bear")));
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next(), None);
 
     // Set B upper limit is the end of database
-    let tx = tx.reset().renew().unwrap();
-    let mut range = set_b.range_by_score(&tx, ..).unwrap();
+    let tx = tx.reset().renew()?;
+    let mut range = set_b.range_by_score(&tx, ..)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Cat")));
     assert_eq!(range.next(), None);
+    Ok(())
   }
 
   #[test]
-  fn unique_member() {
-    let (_tmpdir, env) = create_env();
-    let set_a = SortedSet::open(&env, "set_a").unwrap();
+  fn unique_member() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_a = SortedSet::open(&env, "set_a")?;
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 100, "Elephant").unwrap();
+    set_a.add(&mut tx, 100, "Elephant")?;
     // Update the same member with a different score
-    set_a.add(&mut tx, 2000, "Elephant").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 2000, "Elephant")?;
+    tx.commit()?;
 
     // Get the whole set
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    let mut range = set_a.range_by_score(&tx, ..)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next(), None);
+    Ok(())
   }
 
   #[test]
-  fn same_score_diff_member() {
-    let (_tmpdir, env) = create_env();
-    let set_a = SortedSet::open(&env, "set_a").unwrap();
+  fn same_score_diff_member() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_a = SortedSet::open(&env, "set_a")?;
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 100, "Asian Elephant").unwrap();
+    set_a.add(&mut tx, 100, "Asian Elephant")?;
     // Add new member with the same score
-    set_a.add(&mut tx, 100, "African Elephant").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 100, "African Elephant")?;
+    tx.commit()?;
 
     // Get the whole set
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    let mut range = set_a.range_by_score(&tx, ..)?;
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("African Elephant")));
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Asian Elephant")));
     assert_eq!(range.next(), None);
+    Ok(())
   }
 
   #[test]
-  fn remove_element() {
-    let (_tmpdir, env) = create_env();
-    let set_a = SortedSet::open(&env, "set_a").unwrap();
+  fn remove_element() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_a = SortedSet::open(&env, "set_a")?;
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 2000, "Elephant").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 2000, "Elephant")?;
+    tx.commit()?;
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(true), set_a.remove(&mut tx, "Elephant"));
-    tx.commit().unwrap();
+    tx.commit()?;
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(false), set_a.remove(&mut tx, "Elephant"));
+    Ok(())
   }
 
   #[test]
-  fn remove_range_by_score() {
-    let (_tmpdir, env) = create_env();
-    let set_a = SortedSet::open(&env, "set_a").unwrap();
+  fn remove_range_by_score() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_a = SortedSet::open(&env, "set_a")?;
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_a.add(&mut tx, 100, "Elephant").unwrap();
-    set_a.add(&mut tx, 50, "Bear").unwrap();
-    set_a.add(&mut tx, 20, "Cat").unwrap();
-    tx.commit().unwrap();
+    set_a.add(&mut tx, 100, "Elephant")?;
+    set_a.add(&mut tx, 50, "Bear")?;
+    set_a.add(&mut tx, 20, "Cat")?;
+    tx.commit()?;
 
     // Remove the first two elements
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -397,16 +402,17 @@ mod tests {
 
     // Remove left elements
     assert_eq!(Ok(1), set_a.remove_range_by_score(&mut tx, ..));
-    tx.commit().unwrap();
+    tx.commit()?;
 
     // Check that elements DB is empty
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = tx.open_ro_cursor(set_a.elements).unwrap().iter_start();
+    let mut iter = tx.open_ro_cursor(set_a.elements)?.iter_start();
     assert_eq!(None, iter.next());
 
     // Check that skiplist DB is empty
-    let tx = tx.reset().renew().unwrap();
-    let mut iter = tx.open_ro_cursor(set_a.skiplist).unwrap().iter_start();
+    let tx = tx.reset().renew()?;
+    let mut iter = tx.open_ro_cursor(set_a.skiplist)?.iter_start();
     assert_eq!(None, iter.next());
+    Ok(())
   }
 }
