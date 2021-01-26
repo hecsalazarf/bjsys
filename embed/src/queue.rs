@@ -238,6 +238,29 @@ mod tests {
   }
 
   #[test]
+  fn push_full_queue() -> Result<()> {
+    let (_tmpdir, env) = create_env();
+    let queue = Queue::open(&env, "myqueue")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue.push(&mut tx, "X")?;
+    // Increment the index to set it back to zero
+    tx.incr_by(
+      queue.meta,
+      queue.keys.tail,
+      u64::MAX - 1,
+      WriteFlags::default(),
+    )?;
+    tx.commit()?;
+
+    let mut tx = env.begin_rw_txn()?;
+    // Ok because zero position is empty
+    assert_eq!(Ok(()), queue.push(&mut tx, "Y"));
+    // Err because the first push appended a value at index 1
+    assert_eq!(Err(Error::KeyExist), queue.push(&mut tx, "Z"));
+    Ok(())
+  }
+
+  #[test]
   fn pop() {
     let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
