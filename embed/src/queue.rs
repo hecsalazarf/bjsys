@@ -249,7 +249,7 @@ mod tests {
   use lmdb::Transaction;
 
   #[test]
-  fn queue_push() {
+  fn push() {
     let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -279,7 +279,7 @@ mod tests {
   }
 
   #[test]
-  fn queue_pop() {
+  fn pop() {
     let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -309,7 +309,7 @@ mod tests {
   }
 
   #[test]
-  fn queue_remove() {
+  fn remove() {
     let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");

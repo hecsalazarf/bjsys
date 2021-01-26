@@ -269,7 +269,7 @@ mod tests {
   use lmdb::Cursor;
 
   #[test]
-  fn sorted_set_range_by_score() {
+  fn range_by_score() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let set_b = SortedSet::open(&env, "set_b").unwrap();
@@ -317,7 +317,7 @@ mod tests {
   }
 
   #[test]
-  fn sorted_set_unique_member() {
+  fn unique_member() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -334,7 +334,7 @@ mod tests {
   }
 
   #[test]
-  fn sorted_set_same_score_diff_member() {
+  fn same_score_diff_member() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -352,7 +352,7 @@ mod tests {
   }
 
   #[test]
-  fn sorted_set_remove() {
+  fn remove_element() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
 
@@ -369,7 +369,7 @@ mod tests {
   }
 
   #[test]
-  fn sorted_set_remove_range_by_score() {
+  fn remove_range_by_score() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
 
