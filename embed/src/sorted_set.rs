@@ -164,16 +164,8 @@ impl SortedSet {
         Bound::Excluded(bound)
       }
       Bound::Included(score) => {
-        // We add one to an included score, so that the last member is included
-        // in the returned iterator
-        if let Some(s) = score.checked_add(1) {
-          let bound = Self::create_bound_limit(uuid_bytes, &s);
-          Bound::Included(bound)
-        } else {
-          // However, the max score can overflow. Such case requires to increment
-          // the UUID to cover the whole set
-          self.create_unbounded_limit()
-        }
+        let bound = Self::create_bound_limit(uuid_bytes, score);
+        Bound::Included(bound)
       }
       Bound::Unbounded => self.create_unbounded_limit(),
     };
@@ -182,19 +174,16 @@ impl SortedSet {
   }
 
   fn create_unbounded_limit(&self) -> Bound<BoundLimit> {
-    use std::convert::TryInto;
-
-    // Copy the uuid to increment the last byte only
-    let uuid_bytes = self.uuid.as_bytes().as_ref();
-    let mut uuid: [u8; Self::UUID_LEN] = uuid_bytes.try_into().expect("uuid into array");
-    let last = uuid.last_mut().unwrap();
-    if let Some(l) = last.checked_add(1) {
-      *last = l;
-      let bound = Self::create_bound_limit(&uuid, &u64::MIN);
-      Bound::Included(bound)
+    // The unbounded range from user's perspective encompases all the elements with the
+    // same key. So we create the upper limit as Bound::Excluded((UUID + 1 ) + MIN_SCORE)
+    let uiid_num = u128::from_be_bytes(*self.uuid.as_bytes());
+    if let Some(next_uuid) = uiid_num.checked_add(1) {
+      let bound = Self::create_bound_limit(&next_uuid.to_be_bytes(), &u64::MIN);
+      Bound::Excluded(bound)
     } else {
-      // But even the UUID can overflow, meaning we reached the sorted set max
-      // UUID. Very improbable scenario, but theoretically posible. Just in case
+      // However, if the UUID overflows, we reached the maximum UUID. Only
+      // such case means an iteration until the database end. Unlikely, yes;
+      // but theoretically possible
       Bound::Unbounded
     }
   }
@@ -227,8 +216,8 @@ pub struct SortedRange<'txn> {
 impl<'txn> SortedRange<'txn> {
   fn next_inner(&mut self) -> Option<Result<&'txn [u8]>> {
     let res = self.iter.next()?;
-    if res.is_err() {
-      return Some(Err(res.unwrap_err()));
+    if let Err(e) = res {
+      return Some(Err(e));
     }
 
     let key = res.unwrap().0;
@@ -237,10 +226,7 @@ impl<'txn> SortedRange<'txn> {
     let is_in_range = match self.end {
       Bound::Excluded(k) => prefix_key < &k[..],
       Bound::Included(k) => prefix_key <= &k[..],
-      Bound::Unbounded => {
-        let uuid_bytes = self.uuid.as_bytes();
-        &key[..uuid_bytes.len()] != uuid_bytes
-      }
+      Bound::Unbounded => true, // Return all elements until the end
     };
 
     if is_in_range {
@@ -272,20 +258,13 @@ mod tests {
   fn range_by_score() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
-    let set_b = SortedSet::open(&env, "set_b").unwrap();
 
-    // Add to first set
+    // Add to set
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant").unwrap();
     set_a.add(&mut tx, 50, "Bear").unwrap();
     set_a.add(&mut tx, 20, "Cat").unwrap();
-    set_a.add(&mut tx, u64::MAX, "Bigger Elephant").unwrap();
-    tx.commit().unwrap();
-
-    // Add to second set
-    let mut tx = env.begin_rw_txn().expect("rw txn");
-    set_b.add(&mut tx, 100, "Truck").unwrap();
-    set_b.add(&mut tx, 50, "Sedan").unwrap();
+    set_a.add(&mut tx, 101, "Bigger Elephant").unwrap();
     tx.commit().unwrap();
 
     // Get a subset
@@ -297,22 +276,55 @@ mod tests {
 
     // Exclude last member
     let tx = tx.reset().renew().unwrap();
-    let mut range = set_a.range_by_score(&tx, 100..u64::MAX).unwrap();
+    let mut range = set_a.range_by_score(&tx, 100..101).unwrap();
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next(), None);
 
     // Include last member
     let tx = tx.reset().renew().unwrap();
-    let mut range = set_a.range_by_score(&tx, 100..=u64::MAX).unwrap();
+    let mut range = set_a.range_by_score(&tx, 100..=101).unwrap();
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bigger Elephant")));
     assert_eq!(range.next(), None);
+  }
 
-    // Get all members with an unbounded range
+  #[test]
+  fn range_by_score_unbounded() {
+    // UUID_A = UUID::MAX - 1
+    const UUID_A: [u8; 16] = [
+      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0xfe,
+    ];
+    // UUID_B = UUID::MAX
+    const UUID_B: [u8; 16] = [0xff; 16];
+
+    let (_tmpdir, env) = create_env();
+    let mut set_a = SortedSet::open(&env, "set_a").unwrap();
+    let mut set_b = SortedSet::open(&env, "set_b").unwrap();
+    // Intentionally change uuid to test edge case
+    set_a.uuid = Uuid::from_slice(&UUID_A).unwrap();
+    set_b.uuid = Uuid::from_slice(&UUID_B).unwrap();
+
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    set_a.add(&mut tx, 100, "Elephant").unwrap();
+    set_a.add(&mut tx, 50, "Bear").unwrap();
+    tx.commit().unwrap();
+
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    set_b.add(&mut tx, 10, "Cat").unwrap();
+    tx.commit().unwrap();
+
+    // Set A with UUID_A does not overlap with UUID_B
+    let tx = env.begin_ro_txn().expect("ro txn");
+    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bear")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
+    assert_eq!(range.next(), None);
+
+    // Set B upper limit is the end of database
     let tx = tx.reset().renew().unwrap();
     let mut range = set_b.range_by_score(&tx, ..).unwrap();
-    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Sedan")));
-    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Truck")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Cat")));
     assert_eq!(range.next(), None);
   }
 
