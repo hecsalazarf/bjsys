@@ -1,6 +1,6 @@
 //! A sorted set with persistent storage.
 use crate::extension::TransactionExt;
-use lmdb::{Database, Environment, Iter, Result, RoTransaction, RwTransaction};
+use lmdb::{Database, Environment, Iter, Result, RwTransaction, Transaction};
 use std::ops::{Bound, RangeBounds};
 use uuid::Uuid;
 
@@ -73,15 +73,12 @@ impl SortedSet {
 
   /// Return all the elements in the sorted set with a score between `range`.
   /// The elements are considered to be sorted from low to high scores.
-  pub fn range_by_score<'txn, R>(
-    &self,
-    txn: &'txn RoTransaction,
-    range: R,
-  ) -> Result<SortedRange<'txn>>
+  pub fn range_by_score<'txn, T, R>(&self, txn: &'txn T, range: R) -> Result<SortedRange<'txn>>
   where
+    T: Transaction,
     R: RangeBounds<u64>,
   {
-    use lmdb::{Cursor, Transaction};
+    use lmdb::Cursor;
 
     let (start, end) = self.to_bytes_range(range);
     let mut cursor = txn.open_ro_cursor(self.skiplist)?;
@@ -106,6 +103,24 @@ impl SortedSet {
       return Ok(true);
     }
     Ok(false)
+  }
+
+  /// Remove all elements in the sorted set stored with a score between `range`,
+  /// returning the number of elements removed.
+  pub fn remove_range_by_score<R>(&self, txn: &mut RwTransaction, range: R) -> Result<usize>
+  where
+    R: RangeBounds<u64>,
+  {
+    let mut range = self.range_by_score(txn, range)?;
+    let mut removed = 0;
+    while let Some(key) = range.next_inner().transpose()? {
+      let encoded_element = self.encode_elements_key(&key[Self::SKIPLIST_PREFIX_LEN..]);
+      txn.del(self.skiplist, &key, None)?;
+      txn.del(self.elements, &encoded_element, None)?;
+      removed += 1;
+    }
+
+    Ok(removed)
   }
 
   fn encode_elements_key(&self, val: &[u8]) -> Vec<u8> {
@@ -229,7 +244,7 @@ impl<'txn> SortedRange<'txn> {
     };
 
     if is_in_range {
-      Some(Ok(&key[SortedSet::SKIPLIST_PREFIX_LEN..]))
+      Some(Ok(key))
     } else {
       None
     }
@@ -240,7 +255,10 @@ impl<'txn> Iterator for SortedRange<'txn> {
   type Item = Result<&'txn [u8]>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    self.next_inner()
+    self
+      .next_inner()
+      // Include only the element in the returned item
+      .map(|res| res.map(|key| &key[SortedSet::SKIPLIST_PREFIX_LEN..]))
   }
 }
 
@@ -248,7 +266,7 @@ impl<'txn> Iterator for SortedRange<'txn> {
 mod tests {
   use super::*;
   use crate::test_utils::{create_env, utf8_to_str};
-  use lmdb::Transaction;
+  use lmdb::Cursor;
 
   #[test]
   fn sorted_set_range_by_score() {
@@ -334,7 +352,7 @@ mod tests {
   }
 
   #[test]
-  fn sorted_set_remove_member() {
+  fn sorted_set_remove() {
     let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
 
@@ -348,5 +366,35 @@ mod tests {
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(false), set_a.remove(&mut tx, "Elephant"));
+  }
+
+  #[test]
+  fn sorted_set_remove_range_by_score() {
+    let (_tmpdir, env) = create_env();
+    let set_a = SortedSet::open(&env, "set_a").unwrap();
+
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    set_a.add(&mut tx, 100, "Elephant").unwrap();
+    set_a.add(&mut tx, 50, "Bear").unwrap();
+    set_a.add(&mut tx, 20, "Cat").unwrap();
+    tx.commit().unwrap();
+
+    // Remove the first two elements
+    let mut tx = env.begin_rw_txn().expect("rw txn");
+    assert_eq!(Ok(2), set_a.remove_range_by_score(&mut tx, 20..=50));
+
+    // Remove left elements
+    assert_eq!(Ok(1), set_a.remove_range_by_score(&mut tx, ..));
+    tx.commit().unwrap();
+
+    // Check that elements DB is empty
+    let tx = env.begin_ro_txn().expect("ro txn");
+    let mut iter = tx.open_ro_cursor(set_a.elements).unwrap().iter_start();
+    assert_eq!(None, iter.next());
+
+    // Check that skiplist DB is empty
+    let tx = tx.reset().renew().unwrap();
+    let mut iter = tx.open_ro_cursor(set_a.skiplist).unwrap().iter_start();
+    assert_eq!(None, iter.next());
   }
 }
