@@ -245,28 +245,12 @@ impl<'txn> Iterator for QueueIter<'txn> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_utils::{create_env, utf8_to_str};
   use lmdb::Transaction;
-  use tempfile::TempDir;
-
-  fn new_env() -> (TempDir, Environment) {
-    let tmp_dir = tempfile::Builder::new()
-      .prefix("lmdb")
-      .tempdir()
-      .expect("tmp dir");
-    let mut builder = Environment::new();
-    builder.set_max_dbs(10);
-    let env = builder.open(tmp_dir.path()).expect("open env");
-
-    (tmp_dir, env)
-  }
-
-  fn convert_to_str(val: &[u8]) -> &str {
-    std::str::from_utf8(val).expect("convert slice")
-  }
 
   #[test]
   fn queue_push() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     queue.push(&mut tx, "Y").unwrap();
@@ -275,11 +259,11 @@ mod tests {
     tx.commit().unwrap();
 
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue.iter(&tx).expect("iter").map(|i| i.unwrap());
-    assert_eq!(Some("Y"), iter.next().map(convert_to_str));
-    assert_eq!(Some("Z"), iter.next().map(convert_to_str));
-    assert_eq!(Some("X"), iter.next().map(convert_to_str));
-    assert_eq!(None, iter.next().map(convert_to_str));
+    let mut iter = queue.iter(&tx).expect("iter");
+    assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
+    assert_eq!(Some(Ok("Z")), iter.next().map(utf8_to_str));
+    assert_eq!(Some(Ok("X")), iter.next().map(utf8_to_str));
+    assert_eq!(None, iter.next().map(utf8_to_str));
     tx.commit().unwrap();
 
     let queue2 = Queue::open(&env, "anotherqueue").expect("open queue");
@@ -288,15 +272,15 @@ mod tests {
     tx.commit().unwrap();
 
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue2.iter(&tx).expect("iter").map(|i| i.unwrap());
-    assert_eq!(Some("A"), iter.next().map(convert_to_str));
-    assert_eq!(None, iter.next().map(convert_to_str));
+    let mut iter = queue2.iter(&tx).expect("iter");
+    assert_eq!(Some(Ok("A")), iter.next().map(utf8_to_str));
+    assert_eq!(None, iter.next().map(utf8_to_str));
     tx.commit().unwrap();
   }
 
   #[test]
   fn queue_pop() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     queue.push(&mut tx, "Y").unwrap();
@@ -309,24 +293,24 @@ mod tests {
     tx.commit().unwrap();
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    let opt_pop = queue.pop(&mut tx).unwrap();
-    assert_eq!(Some("Y"), opt_pop.map(convert_to_str));
+    let opt_pop = queue.pop(&mut tx).transpose();
+    assert_eq!(Some(Ok("Y")), opt_pop.map(utf8_to_str));
     tx.commit().unwrap();
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    let opt_pop = queue.pop(&mut tx).unwrap();
-    assert_eq!(Some("Z"), opt_pop.map(convert_to_str));
+    let opt_pop = queue.pop(&mut tx).transpose();
+    assert_eq!(Some(Ok("Z")), opt_pop.map(utf8_to_str));
     tx.commit().unwrap();
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
-    let opt_pop = queue.pop(&mut tx).unwrap();
-    assert_eq!(None, opt_pop.map(convert_to_str));
+    let opt_pop = queue.pop(&mut tx).transpose();
+    assert_eq!(None, opt_pop.map(utf8_to_str));
     tx.commit().unwrap();
   }
 
   #[test]
   fn queue_remove() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let queue = Queue::open(&env, "myqueue").expect("open queue");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     queue.push(&mut tx, "X").unwrap();
@@ -340,8 +324,8 @@ mod tests {
     assert_eq!(2, removed);
 
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut iter = queue.iter(&tx).expect("iter").map(|i| i.unwrap());
-    assert_eq!(Some("Y"), iter.next().map(convert_to_str));
+    let mut iter = queue.iter(&tx).expect("iter");
+    assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next());
   }
 }

@@ -1,9 +1,6 @@
 //! A sorted set with persistent storage.
 use crate::extension::TransactionExt;
-use lmdb::{
-  Cursor, Database, Environment, Iter, Result, RoTransaction, RwTransaction, Transaction,
-  WriteFlags,
-};
+use lmdb::{Database, Environment, Iter, Result, RoTransaction, RwTransaction};
 use std::ops::{Bound, RangeBounds};
 use uuid::Uuid;
 
@@ -65,7 +62,7 @@ impl SortedSet {
       txn.del(self.skiplist, &encoded_key, None)?;
     }
 
-    let write_flags = WriteFlags::default();
+    let write_flags = lmdb::WriteFlags::default();
     let encoded_score = score.to_be_bytes();
     let encoded_key = self.encode_skiplist_key(&encoded_score, val.as_ref());
     // Insert new element into both skiplist and members databases
@@ -84,6 +81,8 @@ impl SortedSet {
   where
     R: RangeBounds<u64>,
   {
+    use lmdb::{Cursor, Transaction};
+
     let (start, end) = self.to_bytes_range(range);
     let mut cursor = txn.open_ro_cursor(self.skiplist)?;
     let iter = cursor.iter_from(start);
@@ -248,27 +247,12 @@ impl<'txn> Iterator for SortedRange<'txn> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use tempfile::TempDir;
-
-  fn new_env() -> (TempDir, Environment) {
-    let tmp_dir = tempfile::Builder::new()
-      .prefix("lmdb")
-      .tempdir()
-      .expect("tmp dir");
-    let mut builder = Environment::new();
-    builder.set_max_dbs(10);
-    let env = builder.open(tmp_dir.path()).expect("open env");
-
-    (tmp_dir, env)
-  }
-
-  fn convert_to_str(val: &[u8]) -> &str {
-    std::str::from_utf8(val).expect("convert slice")
-  }
+  use crate::test_utils::{create_env, utf8_to_str};
+  use lmdb::Transaction;
 
   #[test]
   fn sorted_set_range_by_score() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let set_b = SortedSet::open(&env, "set_b").unwrap();
 
@@ -288,44 +272,35 @@ mod tests {
 
     // Get a subset
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a
-      .range_by_score(&tx, 20..=50)
-      .unwrap()
-      .map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("Cat"));
-    assert_eq!(range.next().map(convert_to_str), Some("Bear"));
-    assert_eq!(range.next().map(convert_to_str), None);
+    let mut range = set_a.range_by_score(&tx, 20..=50).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Cat")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bear")));
+    assert_eq!(range.next().map(utf8_to_str), None);
 
     // Exclude last member
     let tx = tx.reset().renew().unwrap();
-    let mut range = set_a
-      .range_by_score(&tx, 100..u64::MAX)
-      .unwrap()
-      .map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("Elephant"));
-    assert_eq!(range.next().map(convert_to_str), None);
+    let mut range = set_a.range_by_score(&tx, 100..u64::MAX).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
+    assert_eq!(range.next(), None);
 
     // Include last member
     let tx = tx.reset().renew().unwrap();
-    let mut range = set_a
-      .range_by_score(&tx, 100..=u64::MAX)
-      .unwrap()
-      .map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("Elephant"));
-    assert_eq!(range.next().map(convert_to_str), Some("Bigger Elephant"));
+    let mut range = set_a.range_by_score(&tx, 100..=u64::MAX).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Bigger Elephant")));
     assert_eq!(range.next(), None);
 
     // Get all members with an unbounded range
     let tx = tx.reset().renew().unwrap();
-    let mut range = set_b.range_by_score(&tx, ..).unwrap().map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("Sedan"));
-    assert_eq!(range.next().map(convert_to_str), Some("Truck"));
+    let mut range = set_b.range_by_score(&tx, ..).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Sedan")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Truck")));
     assert_eq!(range.next(), None);
   }
 
   #[test]
   fn sorted_set_unique_member() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant").unwrap();
@@ -335,14 +310,14 @@ mod tests {
 
     // Get the whole set
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, ..).unwrap().map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("Elephant"));
+    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Elephant")));
     assert_eq!(range.next(), None);
   }
 
   #[test]
   fn sorted_set_same_score_diff_member() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Asian Elephant").unwrap();
@@ -352,15 +327,15 @@ mod tests {
 
     // Get the whole set
     let tx = env.begin_ro_txn().expect("ro txn");
-    let mut range = set_a.range_by_score(&tx, ..).unwrap().map(|i| i.unwrap());
-    assert_eq!(range.next().map(convert_to_str), Some("African Elephant"));
-    assert_eq!(range.next().map(convert_to_str), Some("Asian Elephant"));
+    let mut range = set_a.range_by_score(&tx, ..).unwrap();
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("African Elephant")));
+    assert_eq!(range.next().map(utf8_to_str), Some(Ok("Asian Elephant")));
     assert_eq!(range.next(), None);
   }
 
   #[test]
   fn sorted_set_remove_member() {
-    let (_tmpdir, env) = new_env();
+    let (_tmpdir, env) = create_env();
     let set_a = SortedSet::open(&env, "set_a").unwrap();
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
