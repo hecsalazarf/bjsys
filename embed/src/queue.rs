@@ -1,5 +1,5 @@
 //! A queue with persitent storage.
-use crate::extension::TransactionExt;
+use crate::extension::{TransactionExt, TransactionRwExt};
 use lmdb::{Cursor, Database, Environment, Error, Iter, Result, RwTransaction, WriteFlags};
 use uuid::Uuid;
 
@@ -55,12 +55,6 @@ pub struct Queue {
 }
 
 impl Queue {
-  /// Zero pointer of queue (0_i64)
-  const ZERO_PTR: &'static [u8] = &[0, 0, 0, 0, 0, 0, 0, 0];
-  /// Initial pointer of tail (-1_i64)
-  const INIT_TAIL: &'static [u8] = &[255, 255, 255, 255, 255, 255, 255, 255];
-  /// Min pointer of queue, meaning the pointer got wrapped.
-  const WRAP_PTR: &'static [u8] = &[128, 0, 0, 0, 0, 0, 0, 0];
   /// Meta DB name.
   const META_DB_NAME: &'static str = "__queue_meta";
   /// Elements DB name.
@@ -77,15 +71,6 @@ impl Queue {
     let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
     let keys = QueueKeys::new(&uuid);
 
-    let tx = env.begin_ro_txn()?;
-    if tx.get_opt(elements, &keys.tail)?.is_none() {
-      use lmdb::Transaction;
-      let mut tx = env.begin_rw_txn()?;
-      let flags = WriteFlags::default();
-      tx.put(meta, &keys.tail, &Self::INIT_TAIL, flags)?;
-      tx.commit()?;
-    }
-
     Ok(Self {
       elements,
       meta,
@@ -98,19 +83,8 @@ impl Queue {
   pub fn push<V: AsRef<[u8]>>(&self, txn: &mut RwTransaction, val: V) -> Result<()> {
     let write_flags = WriteFlags::default();
 
-    let opt_tail = txn.get_opt(self.meta, &self.keys.tail)?;
-
-    let mut next_tail = incr_slice(opt_tail, 1)?;
-
-    if next_tail == Self::WRAP_PTR {
-      // Set tail to its initial state
-      txn.put(self.meta, &self.keys.tail, &Self::ZERO_PTR, write_flags)?;
-      next_tail = [0; 8];
-    } else {
-      txn.put(self.meta, &self.keys.tail, &next_tail, write_flags)?;
-    }
-
-    let encoded_key = self.encode_members_key(&next_tail);
+    let (next_tail, _) = txn.incr_by(self.meta, self.keys.tail, 1, write_flags)?;
+    let encoded_key = self.encode_members_key(&next_tail.to_be_bytes());
     if txn.get_opt(self.elements, encoded_key)?.is_some() {
       // Error if full, transaction must abort
       return Err(Error::KeyExist);
@@ -186,21 +160,6 @@ impl Queue {
       .zip(chain)
       .for_each(|(new, chained)| *new = *chained);
     key
-  }
-}
-
-/// Auxiliar function that increments a &[u8] by `incr`. Returns error if `slice`
-/// is not a valid `i64`.
-fn incr_slice(slice: Option<&[u8]>, incr: i64) -> Result<[u8; 8]> {
-  use std::convert::TryInto;
-
-  if let Some(val) = slice {
-    let arr = val.try_into().map_err(|_| Error::Invalid)?;
-    let new_incr = i64::from_be_bytes(arr).wrapping_add(incr);
-    Ok(new_incr.to_be_bytes())
-  } else {
-    // If key is empty, initialize with incr
-    Ok(incr.to_be_bytes())
   }
 }
 
