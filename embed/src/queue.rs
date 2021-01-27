@@ -154,6 +154,7 @@ impl Queue {
   }
 }
 
+/// Iterator on queue's elements.
 pub struct QueueIter<'txn> {
   inner: Iter<'txn>,
   uuid: Uuid,

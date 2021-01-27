@@ -205,7 +205,7 @@ impl SortedSet {
   }
 }
 
-/// Iterator with elements returned after calling SortedSet::range_by_score.
+/// Iterator with elements returned after calling `SortedSet::range_by_score`.
 #[derive(Debug)]
 pub struct SortedRange<'txn> {
   end: Bound<BoundLimit>,
