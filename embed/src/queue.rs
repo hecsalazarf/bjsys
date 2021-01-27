@@ -6,7 +6,7 @@ use uuid::Uuid;
 type MetaKey = [u8; 17];
 type ElementKey = [u8; 24];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct QueueKeys {
   /// Queue's tail.
   tail: MetaKey,
@@ -42,7 +42,7 @@ impl QueueKeys {
 ///
 /// [`push`]: Queue::push
 /// [`pop`]: Queue::pop
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Queue {
   /// Grouped keys for meta retrieval
   keys: QueueKeys,
@@ -112,12 +112,11 @@ impl Queue {
   where
     V: AsRef<[u8]>,
   {
-    let iter = self.scan(txn)?;
+    let mut iter = self.iter(txn)?;
     let val = val.as_ref();
     let mut removed = 0;
 
-    for i in iter {
-      let (key, value) = i?;
+    while let Some((key, value)) = iter.next_inner().transpose()? {
       if val == value {
         txn.del(self.elements, &key, None)?;
         removed += 1;
@@ -126,6 +125,7 @@ impl Queue {
         }
       }
     }
+
     Ok(removed)
   }
 
@@ -134,27 +134,18 @@ impl Queue {
   where
     T: lmdb::Transaction,
   {
-    let inner = self.scan(txn)?;
-    Ok(QueueIter { inner })
-  }
-
-  /// Scan over all the elements in this queue.
-  fn scan<'txn, T>(&self, txn: &'txn T) -> Result<InnerIter<'txn>>
-  where
-    T: lmdb::Transaction,
-  {
     let mut cursor = txn.open_ro_cursor(self.elements)?;
-    let inner = InnerIter {
-      iter: cursor.iter_from(self.uuid.as_bytes()),
-      uuid: self.uuid,
-    };
 
-    Ok(inner)
+    Ok(QueueIter {
+      inner: cursor.iter_from(self.uuid.as_bytes()),
+      uuid: self.uuid,
+    })
   }
 
   fn encode_members_key(&self, index: &[u8]) -> ElementKey {
     let chain = self.uuid.as_bytes().iter().chain(index);
     let mut key = ElementKey::default();
+
     key
       .iter_mut()
       .zip(chain)
@@ -163,16 +154,14 @@ impl Queue {
   }
 }
 
-struct InnerIter<'txn> {
-  iter: Iter<'txn>,
+pub struct QueueIter<'txn> {
+  inner: Iter<'txn>,
   uuid: Uuid,
 }
 
-impl<'txn> Iterator for InnerIter<'txn> {
-  type Item = Result<(&'txn [u8], &'txn [u8])>;
-
-  fn next(&mut self) -> Option<Self::Item> {
-    let next = self.iter.next();
+impl<'txn> QueueIter<'txn> {
+  fn next_inner(&mut self) -> Option<Result<(&'txn [u8], &'txn [u8])>> {
+    let next = self.inner.next();
     if let Some(Ok((key, _))) = next {
       // Extract the uuid and compare it, so that we know we are still
       // on the same queue
@@ -189,15 +178,11 @@ impl<'txn> Iterator for InnerIter<'txn> {
   }
 }
 
-pub struct QueueIter<'txn> {
-  inner: InnerIter<'txn>,
-}
-
 impl<'txn> Iterator for QueueIter<'txn> {
   type Item = Result<&'txn [u8]>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    self.inner.next().map(|res| res.map(|(_, val)| val))
+    self.next_inner().map(|res| res.map(|(_, val)| val))
   }
 }
 
