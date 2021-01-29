@@ -55,6 +55,7 @@ impl SortedSet {
   where
     V: AsRef<[u8]>,
   {
+    let mut txn = txn.begin_nested_txn()?;
     let encoded_element = self.encode_elements_key(val.as_ref());
     if let Some(old_score) = txn.get_opt(self.elements, &encoded_element)? {
       // If the member already exists, remove it from skiplist before new insertion
@@ -68,7 +69,7 @@ impl SortedSet {
     // Insert new element into both skiplist and members databases
     txn.put(self.skiplist, &encoded_key, &[], write_flags)?;
     txn.put(self.elements, &encoded_element, &encoded_score, write_flags)?;
-    Ok(())
+    txn.commit()
   }
 
   /// Return all the elements in the sorted set with a score between `range`.
@@ -98,8 +99,10 @@ impl SortedSet {
     let encoded_member = self.encode_elements_key(val.as_ref());
     if let Some(score) = txn.get_opt(self.elements, &encoded_member)? {
       let encoded_key = self.encode_skiplist_key(score, val.as_ref());
+      let mut txn = txn.begin_nested_txn()?;
       txn.del(self.skiplist, &encoded_key, None)?;
       txn.del(self.elements, &encoded_member, None)?;
+      txn.commit()?;
       return Ok(true);
     }
     Ok(false)
@@ -111,7 +114,8 @@ impl SortedSet {
   where
     R: RangeBounds<u64>,
   {
-    let mut range = self.range_by_score(txn, range)?;
+    let mut txn = txn.begin_nested_txn()?;
+    let mut range = self.range_by_score(&txn, range)?;
     let mut removed = 0;
     while let Some(key) = range.next_inner().transpose()? {
       let encoded_element = self.encode_elements_key(&key[Self::SKIPLIST_PREFIX_LEN..]);
@@ -119,7 +123,7 @@ impl SortedSet {
       txn.del(self.elements, &encoded_element, None)?;
       removed += 1;
     }
-
+    txn.commit()?;
     Ok(removed)
   }
 
@@ -309,9 +313,6 @@ mod tests {
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant")?;
     set_a.add(&mut tx, 50, "Bear")?;
-    tx.commit()?;
-
-    let mut tx = env.begin_rw_txn().expect("rw txn");
     set_b.add(&mut tx, 10, "Cat")?;
     tx.commit()?;
 
@@ -374,13 +375,7 @@ mod tests {
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 2000, "Elephant")?;
-    tx.commit()?;
-
-    let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(true), set_a.remove(&mut tx, "Elephant"));
-    tx.commit()?;
-
-    let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(false), set_a.remove(&mut tx, "Elephant"));
     Ok(())
   }
@@ -394,12 +389,9 @@ mod tests {
     set_a.add(&mut tx, 100, "Elephant")?;
     set_a.add(&mut tx, 50, "Bear")?;
     set_a.add(&mut tx, 20, "Cat")?;
-    tx.commit()?;
 
     // Remove the first two elements
-    let mut tx = env.begin_rw_txn().expect("rw txn");
     assert_eq!(Ok(2), set_a.remove_range_by_score(&mut tx, 20..=50));
-
     // Remove left elements
     assert_eq!(Ok(1), set_a.remove_range_by_score(&mut tx, ..));
     tx.commit()?;

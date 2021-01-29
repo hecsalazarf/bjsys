@@ -1,6 +1,8 @@
 //! A queue with persitent storage.
 use crate::extension::{TransactionExt, TransactionRwExt};
-use lmdb::{Cursor, Database, Environment, Error, Iter, Result, RwTransaction, WriteFlags};
+use lmdb::{
+  Cursor, Database, Environment, Error, Iter, Result, RwTransaction, Transaction, WriteFlags,
+};
 use uuid::Uuid;
 
 type MetaKey = [u8; 17];
@@ -81,6 +83,7 @@ impl Queue {
 
   /// Preppend one element to the queue's tail.
   pub fn push<V: AsRef<[u8]>>(&self, txn: &mut RwTransaction, val: V) -> Result<()> {
+    let mut txn = txn.begin_nested_txn()?;
     let write_flags = WriteFlags::default();
 
     let (next_tail, _) = txn.incr_by(self.meta, self.keys.tail, 1, write_flags)?;
@@ -90,11 +93,13 @@ impl Queue {
       return Err(Error::KeyExist);
     }
 
-    txn.put(self.elements, &encoded_key, &val, write_flags)
+    txn.put(self.elements, &encoded_key, &val, write_flags)?;
+    txn.commit()
   }
 
   /// Pop one element from the queue's head. Return `None` if queue is empty.
   pub fn pop<'txn>(&self, txn: &'txn mut RwTransaction) -> Result<Option<&'txn [u8]>> {
+    let mut txn = txn.begin_nested_txn()?;
     let mut cursor = txn.open_rw_cursor(self.elements)?;
     let iter = cursor.iter_from(self.uuid.as_bytes());
     let opt_pop = iter.take(1).next().transpose()?;
@@ -103,6 +108,8 @@ impl Queue {
       let write_flags = WriteFlags::default();
       cursor.del(write_flags)?;
     }
+    drop(cursor);
+    txn.commit()?;
 
     Ok(opt_pop.map(|(_, val)| val))
   }
@@ -112,7 +119,8 @@ impl Queue {
   where
     V: AsRef<[u8]>,
   {
-    let mut iter = self.iter(txn)?;
+    let mut txn = txn.begin_nested_txn()?;
+    let mut iter = self.iter(&txn)?;
     let val = val.as_ref();
     let mut removed = 0;
 
@@ -125,14 +133,14 @@ impl Queue {
         }
       }
     }
-
+    txn.commit()?;
     Ok(removed)
   }
 
   /// Create an iterator over the elements of the queue.
   pub fn iter<'txn, T>(&self, txn: &'txn T) -> Result<QueueIter<'txn>>
   where
-    T: lmdb::Transaction,
+    T: Transaction,
   {
     let mut cursor = txn.open_ro_cursor(self.elements)?;
 
@@ -196,28 +204,29 @@ mod tests {
   #[test]
   fn push() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue = Queue::open(&env, "myqueue")?;
+    let queue_1 = Queue::open(&env, "myqueue")?;
+    let queue_2 = Queue::open(&env, "anotherqueue")?;
+
     let mut tx = env.begin_rw_txn()?;
-    queue.push(&mut tx, "Y")?;
-    queue.push(&mut tx, "Z")?;
-    queue.push(&mut tx, "X")?;
+    queue_1.push(&mut tx, "Y")?;
+    queue_1.push(&mut tx, "Z")?;
+    queue_1.push(&mut tx, "X")?;
     tx.commit()?;
 
     let tx = env.begin_ro_txn()?;
-    let mut iter = queue.iter(&tx)?;
+    let mut iter = queue_1.iter(&tx)?;
     assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
     assert_eq!(Some(Ok("Z")), iter.next().map(utf8_to_str));
     assert_eq!(Some(Ok("X")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next().map(utf8_to_str));
     tx.commit()?;
 
-    let queue2 = Queue::open(&env, "anotherqueue")?;
     let mut tx = env.begin_rw_txn()?;
-    queue2.push(&mut tx, "A")?;
+    queue_2.push(&mut tx, "A")?;
     tx.commit()?;
 
     let tx = env.begin_ro_txn()?;
-    let mut iter = queue2.iter(&tx)?;
+    let mut iter = queue_2.iter(&tx)?;
     assert_eq!(Some(Ok("A")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next().map(utf8_to_str));
     tx.commit()
@@ -249,29 +258,20 @@ mod tests {
   #[test]
   fn pop() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue = Queue::open(&env, "myqueue")?;
-    let mut tx = env.begin_rw_txn()?;
-    queue.push(&mut tx, "Y")?;
-    queue.push(&mut tx, "Z")?;
-    tx.commit()?;
-
-    let queue2 = Queue::open(&env, "anotherqueue")?;
-    let mut tx = env.begin_rw_txn()?;
-    queue2.push(&mut tx, "A")?;
-    tx.commit()?;
+    let queue_1 = Queue::open(&env, "myqueue")?;
+    let queue_2 = Queue::open(&env, "anotherqueue")?;
 
     let mut tx = env.begin_rw_txn()?;
-    let opt_pop = queue.pop(&mut tx).transpose();
+    queue_1.push(&mut tx, "Y")?;
+    queue_1.push(&mut tx, "Z")?;
+    queue_2.push(&mut tx, "A")?;
+
+    let opt_pop = queue_1.pop(&mut tx).transpose();
     assert_eq!(Some(Ok("Y")), opt_pop.map(utf8_to_str));
-    tx.commit()?;
-
-    let mut tx = env.begin_rw_txn()?;
-    let opt_pop = queue.pop(&mut tx).transpose();
+    let opt_pop = queue_1.pop(&mut tx).transpose();
     assert_eq!(Some(Ok("Z")), opt_pop.map(utf8_to_str));
-    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn()?;
-    let opt_pop = queue.pop(&mut tx).transpose();
+    let opt_pop = queue_1.pop(&mut tx).transpose();
     assert_eq!(None, opt_pop.map(utf8_to_str));
     tx.commit()
   }
@@ -284,12 +284,10 @@ mod tests {
     queue.push(&mut tx, "X")?;
     queue.push(&mut tx, "X")?;
     queue.push(&mut tx, "Y")?;
-    tx.commit()?;
 
-    let mut tx = env.begin_rw_txn()?;
     let removed = queue.remove(&mut tx, 2, "X")?;
-    tx.commit()?;
     assert_eq!(2, removed);
+    tx.commit()?;
 
     let tx = env.begin_ro_txn()?;
     let mut iter = queue.iter(&tx)?;
