@@ -150,6 +150,24 @@ impl Queue {
     })
   }
 
+  /// Returns and removes the head element of the queue, and pushes the element
+  /// at the tail of destination.
+  pub fn pop_and_move<'txn>(
+    &self,
+    txn: &'txn mut RwTransaction,
+    dest: &Self,
+  ) -> Result<Option<Vec<u8>>> {
+    if let Some(elm) = self.pop(txn)? {
+      // Hate to copy, but rust does not allow to pass txn as mutable twice
+      // when holding the reference to elm.
+      let copy = elm.to_vec();
+      dest.push(txn, &copy)?;
+      return Ok(Some(copy));
+    }
+
+    Ok(None)
+  }
+
   fn encode_members_key(&self, index: &[u8]) -> ElementKey {
     let chain = self.uuid.as_bytes().iter().chain(index);
     let mut key = ElementKey::default();
@@ -293,6 +311,29 @@ mod tests {
     let mut iter = queue.iter(&tx)?;
     assert_eq!(Some(Ok("Y")), iter.next().map(utf8_to_str));
     assert_eq!(None, iter.next());
+    Ok(())
+  }
+
+  #[test]
+  fn pop_and_move() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue_1 = Queue::open(&env, "myqueue1")?;
+    let queue_2 = Queue::open(&env, "myqueue2")?;
+    let mut tx = env.begin_rw_txn()?;
+    queue_1.push(&mut tx, &[100])?;
+    queue_1.push(&mut tx, &[200])?;
+    let removed = queue_1.pop_and_move(&mut tx, &queue_2)?;
+    assert_eq!(Some(vec![100]), removed);
+    tx.commit()?;
+
+    let tx = env.begin_ro_txn()?;
+    let mut iter_1 = queue_1.iter(&tx)?;
+    assert_eq!(Some(Ok(&[200][..])), iter_1.next());
+    assert_eq!(None, iter_1.next());
+    
+    let mut iter_2 = queue_2.iter(&tx)?;
+    assert_eq!(Some(Ok(&[100][..])), iter_2.next());
+    assert_eq!(None, iter_2.next());
     Ok(())
   }
 }
