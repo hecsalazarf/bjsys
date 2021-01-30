@@ -1,5 +1,6 @@
 //! Automatically-implemented extension traits on `Transaction` and `Cursor`.
 use lmdb::{Cursor, Database, Error, Result, RwTransaction, Transaction, WriteFlags};
+use serde::{Deserialize, Serialize};
 
 /// An automatically-implemented extension trait on `Transaction` providing
 /// convenience methods.
@@ -21,6 +22,20 @@ pub trait TransactionExt: Transaction {
       |v| Ok(Some(v)),
     )
   }
+
+  /// Gets a typed-item from a database, returns `None` if the item is not in the database.
+  fn get_data<'txn, K, D>(&'txn self, db: Database, key: K) -> Result<Option<D>>
+  where
+    K: AsRef<[u8]>,
+    D: Deserialize<'txn>,
+  {
+    if let Some(d) = self.get_opt(db, key)? {
+      let data = bincode::deserialize(d).map_err(|_| Error::Incompatible)?;
+      return Ok(Some(data));
+    }
+
+    Ok(None)
+  }
 }
 
 /// Extension trait for `RwTransaction`, providing convenience methods.
@@ -33,6 +48,13 @@ pub trait TransactionRwExt: TransactionExt {
   fn incr_by<K>(&mut self, db: Database, key: K, incr: u64, wf: WriteFlags) -> Result<(u64, bool)>
   where
     K: AsRef<[u8]>;
+
+  
+  /// Stores an item  of type `T` into database
+  fn put_data<K, D>(&mut self, db: Database, key: K, data: &D, wf: WriteFlags) -> Result<()>
+  where
+    K: AsRef<[u8]>,
+    D: Serialize;
 }
 
 /// An automatically-implemented extension trait on `Cursor` providing
@@ -70,10 +92,19 @@ impl TransactionRwExt for RwTransaction<'_> {
       let val_arr = val.try_into().map_err(|_| Error::Incompatible)?;
       let res = u64::from_be_bytes(val_arr).overflowing_add(incr);
       self.put(db, &key.as_ref(), &res.0.to_be_bytes(), wf)?;
-      return Ok(res)
+      return Ok(res);
     }
 
     self.put(db, &key.as_ref(), &incr.to_be_bytes(), wf)?;
     Ok((incr, false))
+  }
+
+  fn put_data<K, D: ?Sized>(&mut self, db: Database, key: K, data: &D, wf: WriteFlags) -> Result<()>
+  where
+    K: AsRef<[u8]>,
+    D: Serialize,
+  {
+    let data = bincode::serialize(data).map_err(|_| Error::Incompatible)?;
+    self.put(db, &key.as_ref(), &data, wf)
   }
 }
