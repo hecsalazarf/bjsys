@@ -26,27 +26,6 @@ impl SortedSet {
   const UUID_LEN: usize = 16;
   /// Prefix length of skiplist.
   const SKIPLIST_PREFIX_LEN: usize = 24;
-  /// Skiplist DB name.
-  const SKIPLIST_DB_NAME: &'static str = "__sorted_set_skiplist";
-  /// Members DB name.
-  const ELEMENTS_DB_NAME: &'static str = "__sorted_set_elements";
-
-  /// Open the sorted set with the specified key.
-  pub fn open<K>(env: &Environment, key: K) -> Result<Self>
-  where
-    K: AsRef<[u8]>,
-  {
-    let db_flags = lmdb::DatabaseFlags::default();
-    let skiplist = env.create_db(Some(Self::SKIPLIST_DB_NAME), db_flags)?;
-    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
-    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
-
-    Ok(Self {
-      skiplist,
-      uuid,
-      elements,
-    })
-  }
 
   /// Add one element with the specified score. If specified element is already
   /// a member of the sorted set, the score is updated and the element reinserted
@@ -252,6 +231,45 @@ impl<'txn> Iterator for SortedRange<'txn> {
   }
 }
 
+/// Sorted sets handler in a dedicated LMDB database
+#[derive(Debug, Clone)]
+pub struct SortedSetDb {
+  skiplist: Database,
+  elements: Database,
+}
+
+impl SortedSetDb {
+  /// Skiplist DB name.
+  const SKIPLIST_DB_NAME: &'static str = "__sorted_set_skiplist";
+  /// Members DB name.
+  const ELEMENTS_DB_NAME: &'static str = "__sorted_set_elements";
+  
+  // Open a database of sorted sets..
+  pub fn open(env: &Environment) -> Result<Self> {
+    let db_flags = lmdb::DatabaseFlags::default();
+    let skiplist = env.create_db(Some(Self::SKIPLIST_DB_NAME), db_flags)?;
+    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
+
+    Ok(Self {
+      skiplist,
+      elements,
+    })
+  }
+
+  /// Get the sorted set with the specified key.
+  pub fn get<K: AsRef<[u8]>>(&self, key: K) -> SortedSet {
+    let skiplist = self.skiplist;
+    let elements = self.elements;
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
+    
+    SortedSet {
+      skiplist,
+      elements,
+      uuid,
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -261,7 +279,8 @@ mod tests {
   #[test]
   fn range_by_score() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_a = SortedSet::open(&env, "set_a")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let set_a = set_db.get("set_a");
 
     // Add to set
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -304,8 +323,9 @@ mod tests {
     const UUID_B: [u8; 16] = [0xff; 16];
 
     let (_tmpdir, env) = create_env()?;
-    let mut set_a = SortedSet::open(&env, "set_a")?;
-    let mut set_b = SortedSet::open(&env, "set_b")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let mut set_a = set_db.get("set_a");
+    let mut set_b = set_db.get("set_b");
     // Intentionally change uuid to test edge case
     set_a.uuid = Uuid::from_slice(&UUID_A).unwrap();
     set_b.uuid = Uuid::from_slice(&UUID_B).unwrap();
@@ -334,7 +354,8 @@ mod tests {
   #[test]
   fn unique_member() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_a = SortedSet::open(&env, "set_a")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let set_a = set_db.get( "set_a");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant")?;
     // Update the same member with a different score
@@ -352,7 +373,8 @@ mod tests {
   #[test]
   fn same_score_diff_member() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_a = SortedSet::open(&env, "set_a")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let set_a = set_db.get("set_a");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Asian Elephant")?;
     // Add new member with the same score
@@ -371,7 +393,8 @@ mod tests {
   #[test]
   fn remove_element() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_a = SortedSet::open(&env, "set_a")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let set_a = set_db.get("set_a");
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 2000, "Elephant")?;
@@ -383,7 +406,8 @@ mod tests {
   #[test]
   fn remove_range_by_score() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_a = SortedSet::open(&env, "set_a")?;
+    let set_db = SortedSetDb::open(&env)?;
+    let set_a = set_db.get("set_a");
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant")?;

@@ -57,30 +57,6 @@ pub struct Queue {
 }
 
 impl Queue {
-  /// Meta DB name.
-  const META_DB_NAME: &'static str = "__queue_meta";
-  /// Elements DB name.
-  const ELEMENTS_DB_NAME: &'static str = "__queue_elements";
-
-  /// Open a queue with the provided key.
-  pub fn open<K>(env: &Environment, key: K) -> Result<Self>
-  where
-    K: AsRef<[u8]>,
-  {
-    let db_flags = lmdb::DatabaseFlags::default();
-    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
-    let meta = env.create_db(Some(Self::META_DB_NAME), db_flags)?;
-    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
-    let keys = QueueKeys::new(&uuid);
-
-    Ok(Self {
-      elements,
-      meta,
-      uuid,
-      keys,
-    })
-  }
-
   /// Preppend one element to the queue's tail.
   pub fn push<V: AsRef<[u8]>>(&self, txn: &mut RwTransaction, val: V) -> Result<()> {
     let mut txn = txn.begin_nested_txn()?;
@@ -213,6 +189,44 @@ impl<'txn> Iterator for QueueIter<'txn> {
   }
 }
 
+/// Queues handler in a dedicated LMDB database.
+#[derive(Debug, Clone)]
+pub struct QueueDb {
+  elements: Database,
+  meta: Database,
+}
+
+impl QueueDb {
+  /// Meta DB name.
+  const META_DB_NAME: &'static str = "__queue_meta";
+  /// Elements DB name.
+  const ELEMENTS_DB_NAME: &'static str = "__queue_elements";
+
+  // Open a database of queues.
+  pub fn open(env: &Environment) -> Result<Self> {
+    let db_flags = lmdb::DatabaseFlags::default();
+    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
+    let meta = env.create_db(Some(Self::META_DB_NAME), db_flags)?;
+
+    Ok(Self { elements, meta })
+  }
+
+  /// Get a queue with the provided key.
+  pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Queue {
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
+    let keys = QueueKeys::new(&uuid);
+    let elements = self.elements;
+    let meta = self.meta;
+
+    Queue {
+      elements,
+      meta,
+      uuid,
+      keys,
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -222,8 +236,9 @@ mod tests {
   #[test]
   fn push() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_1 = Queue::open(&env, "myqueue")?;
-    let queue_2 = Queue::open(&env, "anotherqueue")?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue_1 = queue_db.get("myqueue");
+    let queue_2 = queue_db.get("anotherqueue");
 
     let mut tx = env.begin_rw_txn()?;
     queue_1.push(&mut tx, "Y")?;
@@ -253,7 +268,8 @@ mod tests {
   #[test]
   fn push_full_queue() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue = Queue::open(&env, "myqueue")?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue = queue_db.get("myqueue");
     let mut tx = env.begin_rw_txn()?;
     queue.push(&mut tx, "X")?;
     // Increment the index to set it back to zero
@@ -276,8 +292,9 @@ mod tests {
   #[test]
   fn pop() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_1 = Queue::open(&env, "myqueue")?;
-    let queue_2 = Queue::open(&env, "anotherqueue")?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue_1 = queue_db.get("myqueue");
+    let queue_2 = queue_db.get("anotherqueue");
 
     let mut tx = env.begin_rw_txn()?;
     queue_1.push(&mut tx, "Y")?;
@@ -297,7 +314,8 @@ mod tests {
   #[test]
   fn remove() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue = Queue::open(&env, "myqueue")?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue = queue_db.get("myqueue");
     let mut tx = env.begin_rw_txn()?;
     queue.push(&mut tx, "X")?;
     queue.push(&mut tx, "X")?;
@@ -317,8 +335,9 @@ mod tests {
   #[test]
   fn pop_and_move() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_1 = Queue::open(&env, "myqueue1")?;
-    let queue_2 = Queue::open(&env, "myqueue2")?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue_1 = queue_db.get("myqueue1");
+    let queue_2 = queue_db.get("myqueue2");
     let mut tx = env.begin_rw_txn()?;
     queue_1.push(&mut tx, &[100])?;
     queue_1.push(&mut tx, &[200])?;
@@ -330,7 +349,6 @@ mod tests {
     let mut iter_1 = queue_1.iter(&tx)?;
     assert_eq!(Some(Ok(&[200][..])), iter_1.next());
     assert_eq!(None, iter_1.next());
-    
     let mut iter_2 = queue_2.iter(&tx)?;
     assert_eq!(Some(Ok(&[100][..])), iter_2.next());
     assert_eq!(None, iter_2.next());
