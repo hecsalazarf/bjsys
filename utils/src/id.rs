@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
+use std::fmt;
 
 static GENERATOR: IdGenerator = IdGenerator {
   sequence: AtomicU64::new(0),
@@ -53,6 +54,13 @@ pub fn generate_id() -> IncrId {
   GENERATOR.generate()
 }
 
+impl fmt::Display for IncrId {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut buffer = IdGenerator::encode_buffer();
+    f.write_str(self.encode(&mut buffer))
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -83,5 +91,13 @@ mod tests {
         println!("ID[{}]: {}", i, id.encode(&mut buffer));
       });
     }
+  }
+
+  #[test]
+  fn id_to_string() {
+    let id = GENERATOR.generate();
+    let id_string = id.to_string();
+    println!("ID: {}", id_string);
+    assert!(id_string.len() > 0);
   }
 }
