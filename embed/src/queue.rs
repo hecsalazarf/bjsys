@@ -54,6 +54,7 @@ pub struct Queue {
   meta: Database,
   /// UUID
   uuid: Uuid,
+  subscriptions: &'static QueueSubcriptions,
 }
 
 impl Queue {
@@ -144,6 +145,19 @@ impl Queue {
     Ok(None)
   }
 
+  /// Create a new subscriber that listens to events on this queue.
+  pub async fn subscribe(&self) -> QueueSubscriber {
+    self.subscriptions.subscriber(&self.uuid).await
+  }
+
+  /// Publish an `event` to the queue's channel.
+  pub async fn publish(&self, evt: QueueEvent) {
+    self
+      .subscriptions
+      .publish(&self.uuid, evt)
+      .await
+  }
+
   fn encode_members_key(&self, index: &[u8]) -> ElementKey {
     let chain = self.uuid.as_bytes().iter().chain(index);
     let mut key = ElementKey::default();
@@ -202,7 +216,7 @@ impl QueueDb {
   /// Elements DB name.
   const ELEMENTS_DB_NAME: &'static str = "__queue_elements";
 
-  // Open a database of queues.
+  /// Open a database of queues.
   pub fn open(env: &Environment) -> Result<Self> {
     let db_flags = lmdb::DatabaseFlags::default();
     let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
@@ -217,14 +231,107 @@ impl QueueDb {
     let keys = QueueKeys::new(&uuid);
     let elements = self.elements;
     let meta = self.meta;
+    let subscriptions = QueueSubcriptions::get_or_init();
 
     Queue {
       elements,
       meta,
       uuid,
       keys,
+      subscriptions,
     }
   }
+}
+
+use std::collections::HashMap;
+use std::sync::Once;
+use tokio::sync::broadcast::{self, Receiver, Sender};
+use tokio::sync::RwLock;
+
+/// Singleton to manage the channels that propagate 'QueueEvent's.
+#[derive(Debug)]
+struct QueueSubcriptions {
+  subs: RwLock<HashMap<Uuid, Sender<QueueEvent>>>,
+}
+
+impl QueueSubcriptions {
+  // Get or init the `QueueSubcriptions` singleton.
+  pub fn get_or_init() -> &'static Self {
+    static START: Once = Once::new();
+    static mut QUEUE_SUBS: Option<QueueSubcriptions> = None;
+
+    unsafe {
+      // Safe bacause mutation is made only once in a synchronized fashion
+      START.call_once(|| {
+        let instance = QueueSubcriptions {
+          subs: RwLock::new(HashMap::new()),
+        };
+        QUEUE_SUBS = Some(instance);
+      });
+
+      QUEUE_SUBS.as_ref().unwrap()
+    }
+  }
+
+  /// Create a new subscriber for the queue with given `uuid`.
+  pub async fn subscriber(&self, uuid: &Uuid) -> QueueSubscriber {
+    let subs = self.subs.read().await;
+    let rx = if let Some(tx) = subs.get(uuid) {
+      tx.subscribe()
+    } else {
+      drop(subs);
+      let mut subs = self.subs.write().await;
+      let (tx, rx) = broadcast::channel(1);
+      subs.insert(*uuid, tx);
+      rx
+    };
+
+    QueueSubscriber { rx }
+  }
+
+  /// Publish an `event` to the queue channel with `uuid`.
+  pub async fn publish(&self, uuid: &Uuid, event: QueueEvent) -> () {
+    let subs = self.subs.read().await;
+    if let Some(tx) = subs.get(&uuid) {
+      if let Err(_) = tx.send(event) {
+        // TODO: Implement Drop for QueueSubscriber to remove the sender if
+        // there are no more receivers, and avoid this on-demand removal.
+
+        // If all receivers have been dropped, remove the sender
+        // As there is an active reader, we drop it to avoid lock
+        drop(subs);
+        let mut subs = self.subs.write().await;
+        subs.remove(uuid);
+      }
+    }
+  }
+}
+
+/// A subscriber for queue events.
+#[derive(Debug)]
+pub struct QueueSubscriber {
+  rx: Receiver<QueueEvent>,
+}
+
+impl QueueSubscriber {
+  /// Waits to receive an event for the queue. Only push events in the meantime.
+  pub async fn recv(&mut self) -> QueueEvent {
+    loop {
+      if let Ok(evt) = self.rx.recv().await {
+        return evt;
+      }
+      // Errors are not handled because when response is `RecvError::Lagged`, we
+      // keep on waiting for new messages. Besides, `RecvError::Closed` shall not
+      // happen since sender is kept active while there are still receivers.
+    }
+  }
+}
+
+/// Events on queues.
+#[derive(PartialEq, Copy, Clone, Debug)]
+pub enum QueueEvent {
+  /// A new element has been pushed to the queue.
+  Push,
 }
 
 #[cfg(test)]
@@ -352,6 +459,21 @@ mod tests {
     let mut iter_2 = queue_2.iter(&tx)?;
     assert_eq!(Some(Ok(&[100][..])), iter_2.next());
     assert_eq!(None, iter_2.next());
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn pub_sub() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue_1 = queue_db.get("myqueue1");
+    let mut subscriber = queue_1.subscribe().await;
+
+    tokio::spawn(async move {
+      queue_1.publish(QueueEvent::Push).await;
+    });
+
+    assert_eq!(QueueEvent::Push, subscriber.recv().await);
     Ok(())
   }
 }
