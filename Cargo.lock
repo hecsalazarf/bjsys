@@ -470,8 +470,7 @@ checksum = "89203f3fba0a3795506acaad8ebce3c80c0af93f994d5a1d7a0b1eeb23271929"
 [[package]]
 name = "lmdb-rkv"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "447a296f7aca299cfbb50f4e4f3d49451549af655fb7215d7f8c0c3d64bad42b"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#ae01b262969e01d5466b1d22d82d91b5be7ea899"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -482,8 +481,7 @@ dependencies = [
 [[package]]
 name = "lmdb-rkv-sys"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b27470ac25167b3afdfb6af8fcd3bc1be67de50ffbdaf4073378cfded6ae24a5"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#ae01b262969e01d5466b1d22d82d91b5be7ea899"
 dependencies = [
  "cc",
  "libc",
