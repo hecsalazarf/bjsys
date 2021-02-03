@@ -912,11 +912,11 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "embed",
+ "futures-util",
  "proto",
  "rand",
  "redis",
  "tokio",
- "tokio-stream",
  "tonic",
  "tracing",
  "tracing-subscriber",

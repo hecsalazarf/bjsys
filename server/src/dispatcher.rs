@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::Context;
 use tokio::sync::mpsc;
-use tokio_stream::Stream;
+use futures_util::stream::Stream;
 use tonic::Status;
 use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
