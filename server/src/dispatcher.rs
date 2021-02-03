@@ -1,18 +1,20 @@
 use crate::manager::{Manager, WaitingTask};
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
-use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage, Store, StoreError};
+use embed::Error as StoreError;
+use crate::store_lmdb::Storel;
 use core::task::Poll;
 use proto::FetchResponse;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::Context;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tonic::Status;
 use tracing::{debug, error};
 use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
+use uuid::Uuid;
 
 pub struct MasterDispatcher {
   addr: Addr<MasterWorker>,
@@ -20,13 +22,11 @@ pub struct MasterDispatcher {
 
 impl MasterDispatcher {
   pub async fn init(
-    store: &MultiplexedStore,
+    store: &Storel,
     manager: &Manager,
-    conn_info: &ConnectionInfo,
   ) -> Self {
     let worker = MasterWorker {
       dispatchers: HashMap::new(),
-      conn_info: conn_info.clone(),
       store: store.clone(),
       manager: manager.clone(),
     };
@@ -52,7 +52,7 @@ impl MasterDispatcher {
 struct DispatcherValue {
   dispatcher: Addr<Dispatcher>,
   reader: Addr<Reader>,
-  conn_id: usize,
+  // conn_id: usize, // TODO
 }
 
 type DispatcherRecord = (Arc<String>, DispatcherValue);
@@ -60,26 +60,23 @@ type Registration = Result<DispatcherRecord, ActorError>;
 
 pub struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
-  store: MultiplexedStore,
+  store: Storel,
   manager: Manager,
-  conn_info: ConnectionInfo,
 }
 
 impl MasterWorker {
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
     let queue = Arc::new(queue);
-    let reader = Reader::connect(queue.clone(), &self.conn_info)
+    let reader = Reader::connect(queue.clone())
       .await
       .expect("connect to store");
 
-    let conn_id = reader.id();
     let reader_addr = reader.start().await?;
     let dispatcher = Dispatcher::new(queue.clone(), addr, self.store.clone());
     let dispatcher_addr = dispatcher.start().await?;
     let record = DispatcherValue {
       dispatcher: dispatcher_addr,
       reader: reader_addr,
-      conn_id,
     };
     self.dispatchers.insert(queue.clone(), record.clone());
     Ok((queue, record))
@@ -87,18 +84,15 @@ impl MasterWorker {
 
   async fn start_stream(&self, record: DispatcherRecord) -> Result<TaskStream, ActorError> {
     let (tx, rx) = mpsc::channel(1);
-    let exit = Arc::new(Notify::new());
 
     let consumer = Consumer {
       manager: self.manager.clone(),
       queue: record.0,
       reader: record.1.reader,
       dispatcher: record.1.dispatcher,
-      exit,
       tx,
     };
 
-    let exit = consumer.exit.clone();
     let dispatcher = consumer.dispatcher.clone();
     let worker_addr = consumer.start().await?;
     let id = worker_addr.actor_id();
@@ -110,7 +104,6 @@ impl MasterWorker {
     let wr = ConsumerValue {
       _addr: worker_addr,
       pending_task: None,
-      exit,
     };
     dispatcher.call(DispatcherCmd::Init(id, wr)).await?;
 
@@ -119,8 +112,6 @@ impl MasterWorker {
 
   async fn unregister(&mut self, queue: Arc<String>) {
     if let Some(mut record) = self.dispatchers.remove(queue.as_ref()) {
-      use std::iter::once;
-      self.store.stop_by_id(once(record.conn_id)).await;
       record.reader.stop(None).expect("stop reader");
     }
   }
@@ -168,7 +159,6 @@ impl Handler<MasterCmd> for MasterWorker {
 struct ConsumerValue {
   _addr: Addr<Consumer>,
   pending_task: Option<WaitingTask>,
-  exit: Arc<Notify>,
 }
 
 pub struct Dispatcher {
@@ -179,7 +169,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: MultiplexedStore) -> Self {
+  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: Storel) -> Self {
     let consumers = HashMap::new();
     let scheduler = Scheduler::new(queue.clone(), store);
     Self {
@@ -196,7 +186,6 @@ impl Dispatcher {
     if let Some(task) = consumer.pending_task {
       task.finish();
     }
-    consumer.exit.notify_one();
 
     self.consumers.len()
   }
@@ -207,7 +196,6 @@ impl Dispatcher {
       if let Some(task) = consumer.pending_task {
         task.finish();
       }
-      consumer.exit.notify_one();
     }
   }
 
@@ -223,7 +211,7 @@ impl Dispatcher {
     }
   }
 
-  fn get_active(&mut self) -> Vec<Weak<String>> {
+  fn get_active(&mut self) -> Vec<Weak<Uuid>> {
     let map = self.consumers.iter().filter_map(|(_, value)| {
       // Map all active tasks being processed, returning its ID
       value.pending_task.as_ref().map(|task| task.id())
@@ -300,31 +288,27 @@ impl Handler<ServiceCmd> for Dispatcher {
   }
 }
 
-#[message(result = "Vec<Weak<String>>")]
+#[message(result = "Vec<Weak<Uuid>>")]
 pub struct ActiveTasks;
 
 #[tonic::async_trait]
 impl Handler<ActiveTasks> for Dispatcher {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<String>> {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<Uuid>> {
     self.get_active()
   }
 }
 
 struct Reader {
   key: Arc<String>,
-  store: Store,
+  store: Storel,
 }
 
 impl Reader {
-  pub async fn connect(queue: Arc<String>, conn_info: &ConnectionInfo) -> Result<Self, StoreError> {
+  pub async fn connect(queue: Arc<String>) -> Result<Self, StoreError> {
     let key = queue;
-    let store = Store::connect(conn_info).await?;
+    let store = Storel::open().await?;
 
     Ok(Self { key, store })
-  }
-
-  pub fn id(&self) -> usize {
-    self.store.id()
   }
 
   pub async fn read(&mut self) -> Result<Option<FetchResponse>, StoreError> {
@@ -369,13 +353,14 @@ struct Consumer {
   tx: mpsc::Sender<Result<FetchResponse, Status>>,
   dispatcher: Addr<Dispatcher>,
   reader: Addr<Reader>,
-  exit: Arc<Notify>,
   queue: Arc<String>,
 }
 
 impl Consumer {
   async fn send(&mut self, task: FetchResponse, id: u64) {
-    let notify = self.manager.in_process(task.id.clone());
+    // TODO: DO NOT CREATE UUID IN HERE
+    let uuid = Uuid::parse_str(&task.id).expect("uuid from str");
+    let notify = self.manager.in_process(uuid);
 
     // Call to master may fail when its address has been dropped,
     // which it's posible only when the dispatcher received the stop

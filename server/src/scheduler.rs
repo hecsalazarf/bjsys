@@ -1,5 +1,6 @@
 use crate::dispatcher::{ActiveTasks, Dispatcher};
-use crate::store::{MultiplexedStore, RedisStorage, StoreError};
+// use crate::store::{MultiplexedStore, RedisStorage, StoreError};
+use crate::store_lmdb::Storel;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};
@@ -10,7 +11,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-  pub fn new(queue: Arc<String>, store: MultiplexedStore) -> Self {
+  pub fn new(queue: Arc<String>, store: Storel) -> Self {
     let instance = QueueScheduler::new(store, queue);
     Self { inner: instance }
   }
@@ -39,19 +40,19 @@ enum QueueScheduler {
 }
 
 impl QueueScheduler {
-  fn new(store: MultiplexedStore, queue: Arc<String>) -> Self {
+  fn new(store: Storel, queue: Arc<String>) -> Self {
     QueueScheduler::Inst(Some(SchedulerWorker::new(store, queue)))
   }
 }
 
 struct SchedulerWorker {
-  store: MultiplexedStore,
+  store: Storel,
   dispatcher: Option<Addr<Dispatcher>>,
   queue: Arc<String>,
 }
 
 impl SchedulerWorker {
-  pub fn new(store: MultiplexedStore, queue: Arc<String>) -> Self {
+  pub fn new(store: Storel, queue: Arc<String>) -> Self {
     Self {
       store,
       queue,
@@ -60,7 +61,7 @@ impl SchedulerWorker {
   }
 
   async fn poll_delayed(&mut self) {
-    if let Err(e) = self.store.schedule_delayed(self.queue.as_ref(), 5).await {
+    if let Err(e) = self.store.schedule_delayed(self.queue.as_ref()).await {
       error!(
         "Failed to schedule delayed tasks of '{}': {}",
         self.queue, e
@@ -69,14 +70,10 @@ impl SchedulerWorker {
   }
 
   async fn poll_stalled(&mut self) {
-    let log_error = |queue: &str, e: StoreError| {
-      error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
-    };
-
     let queue = self.queue.as_ref();
     let pending = match self.store.read_pending(queue).await {
       Err(e) => {
-        log_error(queue, e);
+        error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
         Vec::new()
       }
       Ok(pending) => pending,
@@ -109,7 +106,7 @@ impl SchedulerWorker {
       });
 
       if let Err(e) = self.store.renqueue(queue, stalled).await {
-        log_error(queue, e);
+        error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
       }
     }
   }

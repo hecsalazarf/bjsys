@@ -470,7 +470,7 @@ checksum = "89203f3fba0a3795506acaad8ebce3c80c0af93f994d5a1d7a0b1eeb23271929"
 [[package]]
 name = "lmdb-rkv"
 version = "0.14.0"
-source = "git+https://github.com/hecsalazarf/lmdb-rs#ae01b262969e01d5466b1d22d82d91b5be7ea899"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#27a0776c5da5655a604b037f34f5542bdb864e18"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -481,7 +481,7 @@ dependencies = [
 [[package]]
 name = "lmdb-rkv-sys"
 version = "0.11.0"
-source = "git+https://github.com/hecsalazarf/lmdb-rs#ae01b262969e01d5466b1d22d82d91b5be7ea899"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#27a0776c5da5655a604b037f34f5542bdb864e18"
 dependencies = [
  "cc",
  "libc",
@@ -911,6 +911,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "embed",
  "proto",
  "rand",
  "redis",
@@ -919,7 +920,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
- "utils",
+ "uuid",
  "xactor",
 ]
 
@@ -1337,6 +1338,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
+ "getrandom",
  "sha1",
 ]
 

@@ -1,7 +1,8 @@
 use crate::dispatcher::{MasterDispatcher, TaskStream};
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
-use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage};
+use crate::store::{ConnectionInfo};
+use crate::store_lmdb::Storel;
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use std::net::SocketAddr;
@@ -44,16 +45,18 @@ impl Runnable for TaskService {
 
 struct TasksServiceImpl {
   // This store must be used ONLY for non-blocking operations
-  store: MultiplexedStore,
+  // store: MultiplexedStore,
   manager: Manager,
   dispatcher: MasterDispatcher,
+  store: Storel,
 }
 
 impl TasksServiceImpl {
-  pub async fn init(redis_conn: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
-    let store = MultiplexedStore::connect(redis_conn).await?;
-    let manager = Manager::init(&store).await?;
-    let dispatcher = MasterDispatcher::init(&store, &manager, redis_conn).await;
+  pub async fn init(_redis_conn: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
+    let m_store = Storel::open().await?;
+    let manager = Manager::init(&m_store).await?;
+    let dispatcher = MasterDispatcher::init(&m_store, &manager).await;
+    let store = Storel::open().await?;
 
     let service = Self {
       store,
@@ -80,19 +83,14 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
-    let payload = request.into_inner();
-    let mut store = self.store.clone();
-
-    let res = if payload.delay > 0 {
-      store.create_delayed_task(&payload, payload.delay).await
-    } else {
-      store.create_task(&payload).await
-    };
+    let task_data = request.into_inner().into();
+    let res = self.store.create_task(&task_data).await;
 
     res
-      .map(|r| {
-        tracing::debug!("Task created with id {}", r);
-        Response::new(CreateResponse { task_id: r })
+      .map(|id| {
+        let id = id.to_simple().to_string();
+        tracing::debug!("Task created with id {}", id);
+        Response::new(CreateResponse { task_id: id })
       })
       .map_err(|e| {
         tracing::error!("Cannot create task: {}", e);

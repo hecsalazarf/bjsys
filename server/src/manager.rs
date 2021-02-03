@@ -1,4 +1,4 @@
-use crate::store::{MultiplexedStore, RedisStorage};
+use crate::store_lmdb::Storel;
 use proto::{AckRequest, TaskStatus};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -14,7 +14,7 @@ pub struct Manager {
 }
 
 impl Manager {
-  pub async fn init(store: &MultiplexedStore) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(store: &Storel) -> Result<Self, Box<dyn std::error::Error>> {
     let worker = ManagerWorker::new(&store).start().await?;
     Ok(Self { worker })
   }
@@ -27,7 +27,7 @@ impl Manager {
       .expect("call ack task")
   }
 
-  pub fn in_process(&self, task_id: String) -> WaitingTask {
+  pub fn in_process(&self, task_id: Uuid) -> WaitingTask {
     let waiting = WaitingTask::new(task_id, self.worker.clone());
     self
       .worker
@@ -40,19 +40,19 @@ impl Manager {
 #[message]
 enum AckCmd {
   InProcess(WaitingTask),
-  Remove(Arc<String>),
+  Remove(Arc<Uuid>),
 }
 
 #[message(result = "Result<(), Status>")]
 struct Acknowledge(AckRequest);
 
 struct ManagerWorker {
-  tasks: HashMap<Arc<String>, Arc<Notify>>,
-  store: MultiplexedStore,
+  tasks: HashMap<Arc<Uuid>, Arc<Notify>>,
+  store: Storel,
 }
 
 impl ManagerWorker {
-  pub fn new(store: &MultiplexedStore) -> Self {
+  pub fn new(store: &Storel) -> Self {
     Self {
       tasks: HashMap::new(),
       store: store.clone(),
@@ -63,7 +63,7 @@ impl ManagerWorker {
     self.tasks.insert(task.id, task.notify);
   }
 
-  fn remove_active(&mut self, id: Arc<String>) {
+  fn remove_active(&mut self, id: Arc<Uuid>) {
     self.tasks.remove(&id);
   }
 
@@ -71,20 +71,24 @@ impl ManagerWorker {
     // Never fails as it's previously validated
     let status = TaskStatus::from_i32(request.status).unwrap();
 
+    // TODO: DO NOT CLONE, ONLY FOR MIGRATION TO LMDB
+    let reqd = request.clone();
     let res = match status {
-      TaskStatus::Done => self.store.finish(&request).await,
-      TaskStatus::Failed => self.store.fail(&request).await,
-      TaskStatus::Canceled => self.store.finish(&request).await,
+      TaskStatus::Done => self.store.finish(reqd).await,
+      TaskStatus::Failed => self.store.fail(reqd).await,
+      TaskStatus::Canceled => self.store.finish(reqd).await,
     };
 
     match res {
       Ok(r) => {
-        if r > 0 {
+        if r {
           debug!(
             "Task {} reported with status {}",
             request.task_id, request.status
           );
-          if let Some(n) = self.tasks.remove(&request.task_id) {
+          // TODO: DO NOT CREATE UUID IN HERE
+          let uuid = Uuid::parse_str(&request.task_id).expect("uuid from str");
+          if let Some(n) = self.tasks.remove(&uuid) {
             n.notify_one();
           }
         }
@@ -114,7 +118,9 @@ impl Handler<AckCmd> for ManagerWorker {
 impl Handler<Acknowledge> for ManagerWorker {
   async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), Status> {
     let req = req.0; // Unwrap request
-    if self.tasks.contains_key(&req.task_id) {
+    // TODO: DO NOT CREATE UUID IN HERE
+    let uuid = Uuid::parse_str(&req.task_id).expect("uuid from str");
+    if self.tasks.contains_key(&uuid) {
       // Report task only if it's pending
       self.ack(req).await
     } else {
@@ -123,15 +129,17 @@ impl Handler<Acknowledge> for ManagerWorker {
   }
 }
 
+use uuid::Uuid;
+
 #[derive(Clone)]
 pub struct WaitingTask {
-  id: Arc<String>,
+  id: Arc<Uuid>,
   notify: Arc<Notify>,
   worker: Addr<ManagerWorker>,
 }
 
 impl WaitingTask {
-  fn new(id: String, worker: Addr<ManagerWorker>) -> Self {
+  fn new(id: Uuid, worker: Addr<ManagerWorker>) -> Self {
     Self {
       id: Arc::new(id),
       notify: Arc::new(Notify::new()),
@@ -139,7 +147,7 @@ impl WaitingTask {
     }
   }
 
-  pub fn id(&self) -> Weak<String> {
+  pub fn id(&self) -> Weak<Uuid> {
     Arc::downgrade(&self.id)
   }
 
