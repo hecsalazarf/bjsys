@@ -1,8 +1,9 @@
-use crate::dispatcher::{MasterDispatcher, TaskStream};
+use crate::dispatcher::MasterDispatcher;
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
-use crate::store::{ConnectionInfo};
+use crate::store::ConnectionInfo;
 use crate::store_lmdb::Storel;
+use crate::task::TaskStream;
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use std::net::SocketAddr;

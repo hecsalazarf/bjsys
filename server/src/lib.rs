@@ -6,5 +6,6 @@ mod scheduler;
 mod service;
 mod store;
 mod store_lmdb;
+mod task;
 
 pub mod app;

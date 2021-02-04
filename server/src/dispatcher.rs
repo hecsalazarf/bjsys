@@ -1,15 +1,12 @@
-use crate::manager::{Manager, WaitingTask};
+use crate::manager::Manager;
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
 use crate::store_lmdb::Storel;
-use core::task::Poll;
+use crate::task::{TaskStream, WaitingTask};
 use embed::Error as StoreError;
-use futures_util::stream::Stream;
 use proto::FetchResponse;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::{Arc, Weak};
-use std::task::Context;
 use tokio::sync::{mpsc, Notify, Semaphore};
 use tonic::Status;
 use tracing::{debug, error};
@@ -242,7 +239,7 @@ impl Actor for Dispatcher {
 }
 
 #[message]
-enum DispatcherCmd {
+pub enum DispatcherCmd {
   Add(u64, WaitingTask),
   Remove(u64),
   Init(u64, ConsumerValue),
@@ -377,7 +374,7 @@ enum ConsumerCmd {
 }
 
 /// Consumer value for the `Dispatcher`'s consumers dictionary.
-struct ConsumerValue {
+pub struct ConsumerValue {
   /// Actor address of `Consumer`.
   _addr: Addr<Consumer>,
   /// Indicates that a pending task is in progress.
@@ -398,10 +395,10 @@ struct Consumer {
 }
 
 impl Consumer {
-  async fn respond(&mut self, task: FetchResponse, id: u64) {
+  async fn respond(&mut self, resp: FetchResponse, id: u64) {
     // TODO: DO NOT CREATE UUID IN HERE
-    let uuid = Uuid::parse_str(&task.id).expect("uuid from str");
-    let notify = self.manager.in_process(uuid);
+    let uuid = Uuid::parse_str(&resp.id).expect("uuid from str");
+    let task = self.manager.in_process(uuid);
 
     // Call to master may fail when its address has been dropped,
     // which it's posible only when the dispatcher received the stop
@@ -409,11 +406,11 @@ impl Consumer {
     // dropped as well.
     self
       .dispatcher
-      .call(DispatcherCmd::Add(id, notify.clone()))
+      .call(DispatcherCmd::Add(id, task.clone()))
       .await
       .unwrap_or(());
-    self.tx.send(Ok(task)).await.expect("send incoming task");
-    notify.wait_to_finish().await;
+    self.tx.send(Ok(resp)).await.expect("send incoming task");
+    task.wait_to_finish().await;
     self
       .dispatcher
       .call(DispatcherCmd::Remove(id))
@@ -486,46 +483,5 @@ impl Handler<ConsumerCmd> for Consumer {
     match cmd {
       ConsumerCmd::Fetch => self.fetch(ctx.actor_id()).await,
     }
-  }
-}
-
-pub struct TaskStream {
-  stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-  dispatcher: Addr<Dispatcher>,
-  id: u64,
-}
-
-impl TaskStream {
-  fn new(
-    stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-    dispatcher: Addr<Dispatcher>,
-    id: u64,
-  ) -> Self {
-    Self {
-      stream,
-      dispatcher,
-      id,
-    }
-  }
-}
-
-impl Stream for TaskStream {
-  type Item = Result<FetchResponse, Status>;
-  fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-    self.stream.poll_recv(cx)
-  }
-}
-
-impl Drop for TaskStream {
-  fn drop(&mut self) {
-    self
-      .dispatcher
-      .send(DispatcherCmd::Disconnect(self.id))
-      .unwrap_or_else(|_| {
-        debug!(
-          "Dispatcher {} was closed earlier",
-          self.dispatcher.actor_id()
-        )
-      });
   }
 }
