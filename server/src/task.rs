@@ -1,20 +1,12 @@
 use crate::dispatcher::Dispatcher;
 use crate::manager::Manager;
-use core::task::Poll;
-use futures_util::stream::Stream;
 use proto::{AckRequest, FetchResponse};
-use std::borrow::Borrow;
-use std::{
-  pin::Pin,
-  sync::{Arc, Weak},
-  task::Context,
-};
+use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
 use tonic::Status;
 use uuid::Uuid;
 
 pub use proto::{TaskData, TaskStatus};
-
 pub type TaskId = Uuid;
 
 #[derive(Default, Debug)]
@@ -45,9 +37,7 @@ impl Task {
   }
 }
 
-use std::convert::TryFrom;
-
-impl TryFrom<AckRequest> for Task {
+impl std::convert::TryFrom<AckRequest> for Task {
   type Error = &'static str;
   fn try_from(val: AckRequest) -> Result<Self, Self::Error> {
     let task = Self {
@@ -65,44 +55,6 @@ impl From<Task> for FetchResponse {
       queue: val.data.queue,
       data: val.data.args,
     }
-  }
-}
-
-pub struct TaskStream {
-  stream: mpsc::Receiver<Result<Task, Status>>,
-  dispatcher: Dispatcher,
-  id: u64,
-}
-
-impl TaskStream {
-  pub fn new(
-    stream: mpsc::Receiver<Result<Task, Status>>,
-    dispatcher: Dispatcher,
-    id: u64,
-  ) -> Self {
-    Self {
-      stream,
-      dispatcher,
-      id,
-    }
-  }
-}
-
-impl Stream for TaskStream {
-  type Item = Result<FetchResponse, Status>;
-  fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-    self
-      .stream
-      .poll_recv(cx)
-      .map(|o| o.map(|r| r.map(|task| FetchResponse::from(task))))
-  }
-}
-
-impl Drop for TaskStream {
-  fn drop(&mut self) {
-    self.dispatcher.drop_consumer(self.id).unwrap_or_else(|_| {
-      tracing::debug!("Dispatcher {} was closed earlier", self.dispatcher.id())
-    });
   }
 }
 
@@ -154,8 +106,53 @@ impl PartialEq for WaitingTask {
 
 impl Eq for WaitingTask {}
 
-impl Borrow<Uuid> for WaitingTask {
+impl std::borrow::Borrow<Uuid> for WaitingTask {
   fn borrow(&self) -> &Uuid {
     self.id.as_ref()
+  }
+}
+
+pub struct TaskStream {
+  stream: mpsc::Receiver<Result<Task, Status>>,
+  dispatcher: Dispatcher,
+  id: u64,
+}
+
+impl TaskStream {
+  pub fn new(
+    stream: mpsc::Receiver<Result<Task, Status>>,
+    dispatcher: Dispatcher,
+    id: u64,
+  ) -> Self {
+    Self {
+      stream,
+      dispatcher,
+      id,
+    }
+  }
+}
+
+impl Drop for TaskStream {
+  fn drop(&mut self) {
+    self.dispatcher.drop_consumer(self.id).unwrap_or_else(|_| {
+      tracing::debug!("Dispatcher {} was closed earlier", self.dispatcher.id())
+    });
+  }
+}
+
+mod stream {
+  use super::{FetchResponse, Status, TaskStream};
+  use core::task::Poll;
+  use futures_util::stream::Stream;
+  use std::{pin::Pin, task::Context};
+
+  impl Stream for TaskStream {
+    type Item = Result<FetchResponse, Status>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+      self
+        .stream
+        .poll_recv(cx)
+        .map(|o| o.map(|r| r.map(|task| FetchResponse::from(task))))
+    }
   }
 }
