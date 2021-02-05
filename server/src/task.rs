@@ -1,4 +1,4 @@
-use crate::dispatcher::{Dispatcher, DispatcherCmd};
+use crate::dispatcher::Dispatcher;
 use crate::manager::Manager;
 use core::task::Poll;
 use futures_util::stream::Stream;
@@ -12,18 +12,17 @@ use std::{
 use tokio::sync::{mpsc, Notify};
 use tonic::Status;
 use uuid::Uuid;
-use xactor::Addr;
 
 pub struct TaskStream {
   stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-  dispatcher: Addr<Dispatcher>,
+  dispatcher: Dispatcher,
   id: u64,
 }
 
 impl TaskStream {
   pub fn new(
     stream: mpsc::Receiver<Result<FetchResponse, Status>>,
-    dispatcher: Addr<Dispatcher>,
+    dispatcher: Dispatcher,
     id: u64,
   ) -> Self {
     Self {
@@ -43,15 +42,9 @@ impl Stream for TaskStream {
 
 impl Drop for TaskStream {
   fn drop(&mut self) {
-    self
-      .dispatcher
-      .send(DispatcherCmd::Disconnect(self.id))
-      .unwrap_or_else(|_| {
-        tracing::debug!(
-          "Dispatcher {} was closed earlier",
-          self.dispatcher.actor_id()
-        )
-      });
+    self.dispatcher.drop_consumer(self.id).unwrap_or_else(|_| {
+      tracing::debug!("Dispatcher {} was closed earlier", self.dispatcher.id())
+    });
   }
 }
 

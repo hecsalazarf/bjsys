@@ -44,14 +44,14 @@ impl MasterDispatcher {
 
 #[derive(Clone)]
 struct DispatcherValue {
-  dispatcher: Addr<Dispatcher>,
-  fetcher: Addr<Fetcher>,
+  dispatcher: Dispatcher,
+  fetcher: Fetcher,
 }
 
 type DispatcherRecord = (Arc<String>, DispatcherValue);
 type Registration = Result<DispatcherRecord, ActorError>;
 
-pub struct MasterWorker {
+struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
   store: Storel,
   manager: Manager,
@@ -60,14 +60,12 @@ pub struct MasterWorker {
 impl MasterWorker {
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
     let queue = Arc::new(queue);
-    let fetcher = Fetcher::new(queue.clone()).await.expect("connect to store");
+    let fetcher = Fetcher::start(queue.clone(), self.store.clone()).await?;
+    let dispatcher = Dispatcher::start(queue.clone(), addr, self.store.clone()).await?;
 
-    let reader_addr = fetcher.start().await?;
-    let dispatcher = Dispatcher::new(queue.clone(), addr, self.store.clone());
-    let dispatcher_addr = dispatcher.start().await?;
     let record = DispatcherValue {
-      dispatcher: dispatcher_addr,
-      fetcher: reader_addr,
+      dispatcher,
+      fetcher,
     };
     self.dispatchers.insert(queue.clone(), record.clone());
     Ok((queue, record))
@@ -99,14 +97,14 @@ impl MasterWorker {
       pending_task: None,
       exit,
     };
-    dispatcher.call(DispatcherCmd::Init(id, cv)).await?;
+    dispatcher.init_consumer(id, cv).await?;
 
     Ok(TaskStream::new(rx, dispatcher, id))
   }
 
   async fn unregister(&mut self, queue: Arc<String>) {
     if let Some(mut record) = self.dispatchers.remove(queue.as_ref()) {
-      record.fetcher.stop(None).expect("stop fetcher");
+      record.fetcher.stop().expect("stop fetcher");
     }
   }
 }
@@ -150,14 +148,56 @@ impl Handler<MasterCmd> for MasterWorker {
   }
 }
 
+#[derive(Clone)]
 pub struct Dispatcher {
+  /// Actor address
+  addr: Addr<DispatcherActor>,
+}
+
+impl Dispatcher {
+  async fn start(
+    queue: Arc<String>,
+    master: Addr<MasterWorker>,
+    store: Storel,
+  ) -> xactor::Result<Self> {
+    let actor = DispatcherActor::new(queue, master, store);
+    let addr = actor.start().await?;
+    Ok(Self { addr })
+  }
+
+  pub fn id(&self) -> u64 {
+    self.addr.actor_id()
+  }
+
+  pub fn drop_consumer(&self, consumer: u64) -> xactor::Result<()> {
+    self.addr.send(DispatcherCmd::Drop(consumer))
+  }
+
+  pub async fn init_consumer(&self, consumer: u64, val: ConsumerValue) -> xactor::Result<()> {
+    self.addr.call(DispatcherCmd::Init(consumer, val)).await
+  }
+
+  pub async fn attach_to(&self, consumer: u64, task: WaitingTask) -> xactor::Result<()> {
+    self.addr.call(DispatcherCmd::Attach(consumer, task)).await
+  }
+
+  pub async fn detach_from(&self, consumer: u64) -> xactor::Result<()> {
+    self.addr.call(DispatcherCmd::Detach(consumer)).await
+  }
+
+  pub async fn active_tasks(&self) -> xactor::Result<Vec<Weak<Uuid>>> {
+    self.addr.call(ActiveTasks).await
+  }
+}
+
+struct DispatcherActor {
   consumers: HashMap<u64, ConsumerValue>,
   master: Addr<MasterWorker>,
   queue: Arc<String>,
   scheduler: Scheduler,
 }
 
-impl Dispatcher {
+impl DispatcherActor {
   fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: Storel) -> Self {
     let consumers = HashMap::new();
     let scheduler = Scheduler::new(queue.clone(), store);
@@ -190,19 +230,19 @@ impl Dispatcher {
     cv.exit.notify_one();
   }
 
-  fn add_pending(&mut self, id: u64, task: WaitingTask) {
+  fn attach_to(&mut self, id: u64, task: WaitingTask) {
     if let Some(consumer) = self.consumers.get_mut(&id) {
       consumer.pending_task = Some(task);
     }
   }
 
-  fn remove_pending(&mut self, id: u64) {
+  fn detach_from(&mut self, id: u64) {
     if let Some(consumer) = self.consumers.get_mut(&id) {
       consumer.pending_task.take();
     }
   }
 
-  fn get_active(&mut self) -> Vec<Weak<Uuid>> {
+  fn active_tasks(&mut self) -> Vec<Weak<Uuid>> {
     let map = self.consumers.iter().filter_map(|(_, value)| {
       // Map all active tasks being processed, returning its ID
       value.pending_task.as_ref().map(|task| task.id())
@@ -213,7 +253,7 @@ impl Dispatcher {
 }
 
 #[tonic::async_trait]
-impl Actor for Dispatcher {
+impl Actor for DispatcherActor {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
     self.remove_all_consumers();
     // Inform master to drop this address
@@ -223,7 +263,7 @@ impl Actor for Dispatcher {
       .await
       .unwrap();
     self.scheduler.stop().expect("stop scheduler");
-    debug!("Queue '{}' is no longer being served", self.queue);
+    debug!("Dispatcher for '{}' stopped", self.queue);
   }
 
   async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
@@ -232,34 +272,42 @@ impl Actor for Dispatcher {
       .await
       .expect("subscribe to shutdown");
 
-    self.scheduler.start(ctx.address()).await?;
-    debug!("Queue '{}' is being dispatched", self.queue);
+    self
+      .scheduler
+      .start(Dispatcher {
+        addr: ctx.address(),
+      })
+      .await?;
+    debug!("Dispatcher for '{}' started", self.queue);
     Ok(())
   }
 }
 
 #[message]
-pub enum DispatcherCmd {
-  Add(u64, WaitingTask),
-  Remove(u64),
+enum DispatcherCmd {
+  Attach(u64, WaitingTask),
+  Detach(u64),
   Init(u64, ConsumerValue),
-  Disconnect(u64),
+  Drop(u64),
 }
 
+#[message(result = "Vec<Weak<Uuid>>")]
+struct ActiveTasks;
+
 #[tonic::async_trait]
-impl Handler<DispatcherCmd> for Dispatcher {
+impl Handler<DispatcherCmd> for DispatcherActor {
   async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
     match cmd {
-      DispatcherCmd::Add(id, t) => {
-        self.add_pending(id, t);
+      DispatcherCmd::Attach(id, t) => {
+        self.attach_to(id, t);
       }
-      DispatcherCmd::Remove(id) => {
-        self.remove_pending(id);
+      DispatcherCmd::Detach(id) => {
+        self.detach_from(id);
       }
       DispatcherCmd::Init(id, addr) => {
         self.consumers.insert(id, addr);
       }
-      DispatcherCmd::Disconnect(id) => {
+      DispatcherCmd::Drop(id) => {
         if self.remove_consumer(id) == 0 {
           ctx.stop(None);
         }
@@ -269,7 +317,14 @@ impl Handler<DispatcherCmd> for Dispatcher {
 }
 
 #[tonic::async_trait]
-impl Handler<ServiceCmd> for Dispatcher {
+impl Handler<ActiveTasks> for DispatcherActor {
+  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<Uuid>> {
+    self.active_tasks()
+  }
+}
+
+#[tonic::async_trait]
+impl Handler<ServiceCmd> for DispatcherActor {
   async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ServiceCmd) {
     match cmd {
       ServiceCmd::Shutdown => {
@@ -279,19 +334,35 @@ impl Handler<ServiceCmd> for Dispatcher {
   }
 }
 
-#[message(result = "Vec<Weak<Uuid>>")]
-pub struct ActiveTasks;
+/// An actor that provides the `FetcherHandle`. There is a running actor per
+/// queue being fetched.
+#[derive(Clone)]
+pub struct Fetcher {
+  /// Actor address
+  addr: Addr<FetcherActor>,
+}
 
-#[tonic::async_trait]
-impl Handler<ActiveTasks> for Dispatcher {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<Uuid>> {
-    self.get_active()
+impl Fetcher {
+  /// Creates a new `FetcherActor` for `queue`.
+  pub async fn start(queue: Arc<String>, store: Storel) -> xactor::Result<Self> {
+    let actor = FetcherActor::new(queue, store);
+    let addr = actor.start().await?;
+    Ok(Self { addr })
+  }
+
+  /// Stop actor.
+  pub fn stop(&mut self) -> xactor::Result<()> {
+    self.addr.stop(None)
+  }
+
+  /// Returns a `FetcherHandle` to fetch tasks.
+  pub async fn get_handle(&mut self) -> xactor::Result<FetcherHandle> {
+    self.addr.call(GetHandle).await
   }
 }
 
-/// An actor that provides the `FetcherHandle`. There is a running actor per
-/// queue being fetched.
-struct Fetcher {
+/// Inner implementation of `Fetcher`
+struct FetcherActor {
   /// Queue name.
   queue: Arc<String>,
   /// Storage DB.
@@ -300,20 +371,17 @@ struct Fetcher {
   semaph: Arc<Semaphore>,
 }
 
-impl Fetcher {
-  /// Creates a new `Fetcher` for `queue`.
-  pub async fn new(queue: Arc<String>) -> Result<Self, StoreError> {
-    let store = Storel::open().await?;
+impl FetcherActor {
+  fn new(queue: Arc<String>, store: Storel) -> Self {
     let semaph = Arc::new(Semaphore::new(1));
-    Ok(Self {
+    Self {
       queue,
       store,
       semaph,
-    })
+    }
   }
 
-  /// Returns a `FetcherHandle` to fetch tasks.
-  pub async fn get_handler(&mut self) -> FetcherHandle {
+  async fn get_handle(&self) -> FetcherHandle {
     FetcherHandle {
       semaph: self.semaph.clone(),
       store: self.store.clone(),
@@ -325,7 +393,7 @@ impl Fetcher {
 /// Handle that limits the access to the storage in order to retrieve tasks
 /// in sequence. This guarantees that consumers fetch tasks in the order they
 /// arrive.
-struct FetcherHandle {
+pub struct FetcherHandle {
   /// Semaphore that controls access to the the store.
   semaph: Arc<Semaphore>,
   /// Underlying storage DB
@@ -344,25 +412,25 @@ impl FetcherHandle {
 }
 
 #[tonic::async_trait]
-impl Actor for Fetcher {
+impl Actor for FetcherActor {
   async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    debug!("Fetcher '{}' stopped", self.queue);
+    debug!("Fetcher for '{}' stopped", self.queue);
   }
 
   async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    debug!("Fetcher '{}' is delivering", self.queue);
+    debug!("Fetcher for '{}' started", self.queue);
     Ok(())
   }
 }
 
-/// Message used by the `Fetcher` actor.
+/// Message used by the `FetcherActor` actor.
 #[message(result = "FetcherHandle")]
-struct GetHandler;
+struct GetHandle;
 
 #[tonic::async_trait]
-impl Handler<GetHandler> for Fetcher {
-  async fn handle(&mut self, _: &mut ActorContext<Self>, _: GetHandler) -> FetcherHandle {
-    self.get_handler().await
+impl Handler<GetHandle> for FetcherActor {
+  async fn handle(&mut self, _: &mut ActorContext<Self>, _: GetHandle) -> FetcherHandle {
+    self.get_handle().await
   }
 }
 
@@ -373,7 +441,7 @@ enum ConsumerCmd {
   Fetch,
 }
 
-/// Consumer value for the `Dispatcher`'s consumers dictionary.
+/// Consumer value for the `DispatcherActor`'s consumers dictionary.
 pub struct ConsumerValue {
   /// Actor address of `Consumer`.
   _addr: Addr<Consumer>,
@@ -385,11 +453,11 @@ pub struct ConsumerValue {
 
 /// A consumer is an actor that abtracts an incoming client connection, fetching
 /// waiting tasks.
-struct Consumer {
+pub struct Consumer {
   manager: Manager,
   tx: mpsc::Sender<Result<FetchResponse, Status>>,
-  dispatcher: Addr<Dispatcher>,
-  fetcher: Addr<Fetcher>,
+  dispatcher: Dispatcher,
+  fetcher: Fetcher,
   queue: Arc<String>,
   exit: Arc<Notify>,
 }
@@ -406,22 +474,18 @@ impl Consumer {
     // dropped as well.
     self
       .dispatcher
-      .call(DispatcherCmd::Add(id, task.clone()))
+      .attach_to(id, task.clone())
       .await
       .unwrap_or(());
     self.tx.send(Ok(resp)).await.expect("send incoming task");
     task.wait_to_finish().await;
-    self
-      .dispatcher
-      .call(DispatcherCmd::Remove(id))
-      .await
-      .unwrap_or(());
+    self.dispatcher.detach_from(id).await.unwrap_or(());
   }
 
   /// Fetch incoming tasks from storage; `id` is the identifier of `Consumer`.
-  async fn fetch(&mut self, id: u64) {
+  pub async fn fetch(&mut self, id: u64) {
     loop {
-      let res = self.fetcher.call(GetHandler).await;
+      let res = self.fetcher.get_handle().await;
       if res.is_err() {
         // The result may only fail when fetcher has dropped. In such case, we
         // break the loop.

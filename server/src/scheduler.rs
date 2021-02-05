@@ -1,5 +1,4 @@
-use crate::dispatcher::{ActiveTasks, Dispatcher};
-// use crate::store::{MultiplexedStore, RedisStorage, StoreError};
+use crate::dispatcher::Dispatcher;
 use crate::store_lmdb::Storel;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +15,7 @@ impl Scheduler {
     Self { inner: instance }
   }
 
-  pub async fn start(&mut self, dispatcher: Addr<Dispatcher>) -> Result<(), ActorError> {
+  pub async fn start(&mut self, dispatcher: Dispatcher) -> Result<(), ActorError> {
     if let QueueScheduler::Inst(ref mut inst) = self.inner {
       let mut scheduler = inst.take().unwrap();
       scheduler.dispatcher.replace(dispatcher);
@@ -47,7 +46,7 @@ impl QueueScheduler {
 
 struct SchedulerWorker {
   store: Storel,
-  dispatcher: Option<Addr<Dispatcher>>,
+  dispatcher: Option<Dispatcher>,
   queue: Arc<String>,
 }
 
@@ -87,7 +86,7 @@ impl SchedulerWorker {
     let dispatcher = self.dispatcher.as_ref().unwrap();
     // Active-tasks call only fails when the dispatcher dropped. In such
     // case, we simply exit
-    if let Ok(mut active) = dispatcher.call(ActiveTasks).await {
+    if let Ok(mut active) = dispatcher.active_tasks().await {
       // Reverse iterator from right to left to respect the order in which they
       // were inserted. Then, filter pending tasks that are not active (stalled).
       let stalled = pending.into_iter().rev().filter(|p| {
@@ -119,12 +118,12 @@ impl Actor for SchedulerWorker {
     // TODO: The poll_stalled() has to be called at start, then at intervals
     // of the configured value
     ctx.send_interval(PollTasks::Stalled, Duration::from_secs(5));
-    debug!("QueueScheduler '{}' started", self.queue);
+    debug!("Scheduler for '{}' started", self.queue);
     Ok(())
   }
 
   async fn stopped(&mut self, _ctx: &mut Context<Self>) {
-    debug!("QueueScheduler '{}' stopped", self.queue);
+    debug!("Scheduler for '{}' stopped", self.queue);
   }
 }
 
