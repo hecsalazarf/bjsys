@@ -1,6 +1,5 @@
 use crate::store_lmdb::Storel;
-use crate::task::WaitingTask;
-use proto::{AckRequest, TaskStatus};
+use crate::task::{WaitingTask, Task, TaskStatus};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tonic::Status;
@@ -18,10 +17,10 @@ impl Manager {
     Ok(Self { actor })
   }
 
-  pub async fn ack(&self, req: AckRequest) -> Result<(), Status> {
+  pub async fn ack(&self, task: Task) -> Result<(), Status> {
     self
       .actor
-      .call(Acknowledge(req))
+      .call(Acknowledge(task))
       .await
       .expect("call ack task")
   }
@@ -50,7 +49,7 @@ pub enum AckCmd {
 }
 
 #[message(result = "Result<(), Status>")]
-struct Acknowledge(AckRequest);
+struct Acknowledge(Task);
 
 struct ManagerActor {
   tasks: HashSet<WaitingTask>,
@@ -73,36 +72,32 @@ impl ManagerActor {
     self.tasks.remove(id.as_ref());
   }
 
-  async fn ack(&mut self, request: AckRequest) -> Result<(), Status> {
-    // Never fails as it's previously validated
-    let status = TaskStatus::from_i32(request.status).unwrap();
-
-    // TODO: DO NOT CLONE, ONLY FOR MIGRATION TO LMDB
-    let reqd = request.clone();
+  async fn ack(&mut self, task: Task) -> Result<(), Status> {
+    let id = *task.id();
+    let status = task.status();
+  
     let res = match status {
-      TaskStatus::Done => self.store.finish(reqd).await,
-      TaskStatus::Failed => self.store.fail(reqd).await,
-      TaskStatus::Canceled => self.store.finish(reqd).await,
+      TaskStatus::Done => self.store.finish(task).await,
+      TaskStatus::Failed => self.store.retry(task).await,
+      TaskStatus::Canceled => self.store.finish(task).await,
     };
 
     match res {
       Ok(r) => {
         if r {
           tracing::debug!(
-            "Task {} reported with status {}",
-            request.task_id,
-            request.status
+            "Task {} reported with status {:?}",
+            id.to_simple(),
+            status
           );
-          // TODO: DO NOT CREATE UUID IN HERE
-          let uuid = Uuid::parse_str(&request.task_id).expect("uuid from str");
-          if let Some(t) = self.tasks.take(&uuid) {
+          if let Some(t) = self.tasks.take(&id) {
             t.acked();
           }
         }
         Ok(())
       }
       Err(e) => {
-        tracing::error!("Cannot report task {}: {}", request.task_id, e);
+        tracing::error!("Cannot report task {}: {}", id, e);
         Err(Status::unavailable("Service not available"))
       }
     }
@@ -124,12 +119,10 @@ impl Handler<AckCmd> for ManagerActor {
 #[tonic::async_trait]
 impl Handler<Acknowledge> for ManagerActor {
   async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), Status> {
-    let req = req.0; // Unwrap request
-                     // TODO: DO NOT CREATE UUID IN HERE
-    let uuid = Uuid::parse_str(&req.task_id).expect("uuid from str");
-    if self.tasks.contains(&uuid) {
+    let task = req.0; // Unwrap request
+    if self.tasks.contains(task.id()) {
       // Report task only if it's pending
-      self.ack(req).await
+      self.ack(task).await
     } else {
       Err(Status::invalid_argument("Task is not pending"))
     }

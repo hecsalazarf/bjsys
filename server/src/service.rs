@@ -85,7 +85,7 @@ impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
     let task_data = request.into_inner().into();
-    let res = self.store.create_task(&task_data).await;
+    let res = self.store.create(&task_data).await;
 
     res
       .map(|id| {
@@ -100,10 +100,16 @@ impl TasksCore for TasksServiceImpl {
   }
 
   async fn ack(&self, request: Request<AckRequest>) -> ServiceResult<Empty> {
+    use std::convert::TryInto;
     request.intercept()?;
+    let task = request
+      .into_inner()
+      .try_into()
+      .map_err(|e| Status::invalid_argument(e))?;
+
     self
       .manager
-      .ack(request.into_inner())
+      .ack(task)
       .await
       .map(|_| Response::new(Empty::default()))
   }

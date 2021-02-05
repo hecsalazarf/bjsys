@@ -2,9 +2,8 @@ use crate::manager::Manager;
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
 use crate::store_lmdb::Storel;
-use crate::task::{TaskStream, WaitingTask};
+use crate::task::{TaskStream, WaitingTask, Task};
 use embed::Error as StoreError;
-use proto::FetchResponse;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify, Semaphore};
@@ -405,9 +404,9 @@ pub struct FetcherHandle {
 impl FetcherHandle {
   /// Fetch tasks from storage. If there is a running handle, this method
   /// blocks until the precedent handle completed.
-  pub async fn fetch(&self) -> Result<FetchResponse, StoreError> {
+  pub async fn fetch(&self) -> Result<Task, StoreError> {
     let _permit = self.semaph.acquire().await.expect("acquire fetch");
-    self.store.read_new(&self.queue).await
+    self.store.find_new(self.queue.as_ref()).await
   }
 }
 
@@ -455,7 +454,7 @@ pub struct ConsumerValue {
 /// waiting tasks.
 pub struct Consumer {
   manager: Manager,
-  tx: mpsc::Sender<Result<FetchResponse, Status>>,
+  tx: mpsc::Sender<Result<Task, Status>>,
   dispatcher: Dispatcher,
   fetcher: Fetcher,
   queue: Arc<String>,
@@ -463,10 +462,8 @@ pub struct Consumer {
 }
 
 impl Consumer {
-  async fn respond(&mut self, resp: FetchResponse, id: u64) {
-    // TODO: DO NOT CREATE UUID IN HERE
-    let uuid = Uuid::parse_str(&resp.id).expect("uuid from str");
-    let task = self.manager.in_process(uuid);
+  async fn respond(&mut self, task: Task, id: u64) {
+    let current_task = self.manager.in_process(*task.id());
 
     // Call to master may fail when its address has been dropped,
     // which it's posible only when the dispatcher received the stop
@@ -474,11 +471,11 @@ impl Consumer {
     // dropped as well.
     self
       .dispatcher
-      .attach_to(id, task.clone())
+      .attach_to(id, current_task.clone())
       .await
       .unwrap_or(());
-    self.tx.send(Ok(resp)).await.expect("send incoming task");
-    task.wait_to_finish().await;
+    self.tx.send(Ok(task)).await.expect("send incoming task");
+    current_task.wait_to_finish().await;
     self.dispatcher.detach_from(id).await.unwrap_or(());
   }
 

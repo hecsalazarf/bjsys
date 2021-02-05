@@ -1,9 +1,8 @@
 use embed::collections::{QueueDb, QueueEvent, SortedSetDb};
 use embed::{Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
-use proto::{AckRequest, FetchResponse, TaskData};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
+use crate::task::{TaskId, Task, TaskData};
 
 #[derive(Debug, Clone)]
 pub struct Storel {
@@ -44,16 +43,14 @@ impl Storel {
     })
   }
 
-  pub async fn create_task(&self, data: &TaskData) -> Result<Uuid> {
+  pub async fn create(&self, data: &TaskData) -> Result<TaskId> {
     let mut is_push = false;
-    
     let queue_name = generate_key(&data.queue, QueueSuffix::WAITING);
     let queue = self.queues.get(queue_name);
-    
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
 
-    let id = Uuid::new_v4();
+    let id = TaskId::new_v4();
     if data.delay > 0 {
       let score = time_to_delay(data.delay);
       let set = self.delays.get(&data.queue);
@@ -72,18 +69,19 @@ impl Storel {
     Ok(id)
   }
 
-  pub async fn read_pending(&self, queue: &str) -> Result<Vec<Uuid>> {
+  pub async fn find_pending<S: AsRef<str>>(&self, queue: S) -> Result<Vec<TaskId>> {
     let writer = self.env.read().await;
     let txr = writer.begin_ro_txn()?;
-    let queue_name = generate_key(queue, QueueSuffix::PENDING);
+    let queue_name = generate_key(queue.as_ref(), QueueSuffix::PENDING);
     let tasks = self.queues.get(queue_name).iter(&txr)?;
 
     tasks
-      .map(|res| res.map(|val| Uuid::from_slice(val).unwrap()))
+      .map(|res| res.map(|val| TaskId::from_slice(val).unwrap()))
       .collect()
   }
 
-  pub async fn read_new(&self, queue: &str) -> Result<FetchResponse> {
+  pub async fn find_new<S: AsRef<str>>(&self, queue: S) -> Result<Task> {
+    let queue = queue.as_ref();
     let waiting = self.queues.get(generate_key(queue, QueueSuffix::WAITING));
     let pending = self.queues.get(generate_key(queue, QueueSuffix::PENDING));
     loop {
@@ -92,17 +90,18 @@ impl Storel {
 
       if let Some(el) = waiting.pop(&mut txw)? {
         // If there is a task, push it to the pending queue
-        let uuid = Uuid::from_slice(el).expect("uuid from value");
-        pending.push(&mut txw, uuid.as_bytes())?;
-        let mut task = self.tasks.get(&txw, uuid.as_bytes())?.expect("task data");
+        let id = TaskId::from_slice(el).expect("uuid from value");
+        let id_bytes = id.as_bytes();
+        pending.push(&mut txw, id_bytes)?;
+        let mut data = self.tasks.get(&txw, id_bytes)?.expect("task data");
         // Increment task's deliveries counter
-        task.deliveries += 1;
+        data.deliveries += 1;
         // Set time stamp
-        task.processed_on = now_as_millis();
+        data.processed_on = now_as_millis();
         // And then update it
-        self.tasks.put(&mut txw, uuid.as_bytes(), &task)?;
+        self.tasks.put(&mut txw, id_bytes, &data)?;
         txw.commit()?;
-        return Ok(FetchResponse::from_pair(uuid.to_string(), task));
+        return Ok(Task::from_parts(id, data));
       }
 
       // If no available task, drop transaction not to block other threads
@@ -119,81 +118,84 @@ impl Storel {
     }
   }
 
-  pub async fn finish(&self, req: AckRequest) -> Result<bool> {
+  pub async fn finish(&self, task: Task) -> Result<bool> {
+    let (id, data) = task.into_parts();
+    let id = id.as_bytes();
+    
     let pending = self
       .queues
-      .get(generate_key(&req.queue, QueueSuffix::PENDING));
-    let done = self.queues.get(generate_key(&req.queue, QueueSuffix::DONE));
+      .get(generate_key(&data.queue, QueueSuffix::PENDING));
+    let done = self.queues.get(generate_key(&data.queue, QueueSuffix::DONE));
 
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
-    // TODO: DO NOT CREATE UUID IN HERE
-    let uuid = Uuid::parse_str(&req.task_id).expect("uuid from str");
-    if let Some(mut data) = self.tasks.get(&txw, uuid.as_bytes())? {
-      data.status = req.status;
-      data.message = req.message;
+
+    if let Some(mut data) = self.tasks.get(&txw, id)? {
+      data.status = data.status;
+      data.message = data.message;
       data.finished_on = now_as_millis();
-      pending.remove(&mut txw, 1, uuid.as_bytes())?;
-      done.push(&mut txw, &req.task_id)?;
-      self.tasks.put(&mut txw, uuid.as_bytes(), &data)?;
+      pending.remove(&mut txw, 1, id)?;
+      done.push(&mut txw, id)?;
+      self.tasks.put(&mut txw, id, &data)?;
       txw.commit()?;
       return Ok(true);
     }
     Ok(false)
   }
 
-  pub async fn fail(&self, req: AckRequest) -> Result<bool> {
+  pub async fn retry(&self, task: Task) -> Result<bool> {
+    let id = task.id().as_bytes();
+
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
 
-    // TODO: DO NOT CREATE UUID IN HERE
-    let uuid = Uuid::parse_str(&req.task_id).expect("uuid from str");
-    if let Some(data) = self.tasks.get(&txw, uuid.as_bytes())? {
+    if let Some(data) = self.tasks.get(&txw, id)? {
       if (data.deliveries - 1) < data.retry {
         let score = time_to_delay(backoff_time(data.deliveries as u64));
 
         let pending = self
           .queues
-          .get(generate_key(&req.queue, QueueSuffix::PENDING));
+          .get(generate_key(&data.queue, QueueSuffix::PENDING));
         let delayed = self.delays.get(&data.queue);
 
-        pending.remove(&mut txw, 1, uuid.as_bytes())?;
-        delayed.add(&mut txw, score, uuid.as_bytes())?;
+        pending.remove(&mut txw, 1, id)?;
+        delayed.add(&mut txw, score, id)?;
         txw.commit()?;
         return Ok(true);
       } else {
         txw.abort();
         drop(writer);
-        return self.finish(req).await;
+        return self.finish(task).await;
       }
     }
     Ok(false)
   }
 
-  pub async fn schedule_delayed(&self, queue_name: &str) -> Result<()> {
-    let queue = self
+  pub async fn schedule_delayed<S: AsRef<str>>(&self, queue: S) -> Result<()> {
+    let queue = queue.as_ref();
+    let waiting = self
       .queues
-      .get(generate_key(queue_name, QueueSuffix::WAITING));
-    let delayed = self.delays.get(queue_name);
+      .get(generate_key(queue, QueueSuffix::WAITING));
+    let delayed = self.delays.get(queue);
     let max = now_as_millis();
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
 
     for res in delayed.range_by_score(&txw, ..max)? {
       let id = res?;
-      queue.push(&mut txw, id)?;
+      waiting.push(&mut txw, id)?;
       delayed.remove(&mut txw, id)?;
     }
 
     txw.commit()?;
-    queue.publish(QueueEvent::Push).await;
+    waiting.publish(QueueEvent::Push).await;
     Ok(())
   }
 
   pub async fn renqueue<Q, I>(&self, queue: Q, ids: I) -> Result<()>
   where
     Q: AsRef<str>,
-    I: Send + Iterator<Item = Uuid>,
+    I: Send + Iterator<Item = TaskId>,
   {
     let pending = self
       .queues

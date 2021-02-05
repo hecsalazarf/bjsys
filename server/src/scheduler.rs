@@ -70,7 +70,7 @@ impl SchedulerWorker {
 
   async fn poll_stalled(&mut self) {
     let queue = self.queue.as_ref();
-    let pending = match self.store.read_pending(queue).await {
+    let pending = match self.store.find_pending(queue).await {
       Err(e) => {
         error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
         Vec::new()
