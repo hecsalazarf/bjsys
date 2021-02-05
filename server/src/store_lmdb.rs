@@ -1,8 +1,8 @@
-use embed::collections::{QueueDb, QueueEvent, SortedSetDb};
+use crate::task::{Task, TaskData, TaskId};
+use embed::collections::{Queue, QueueDb, QueueEvent, SortedSetDb};
 use embed::{Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::task::{TaskId, Task, TaskData};
 
 #[derive(Debug, Clone)]
 pub struct Storel {
@@ -45,8 +45,7 @@ impl Storel {
 
   pub async fn create(&self, data: &TaskData) -> Result<TaskId> {
     let mut is_push = false;
-    let queue_name = generate_key(&data.queue, QueueSuffix::WAITING);
-    let queue = self.queues.get(queue_name);
+    let waiting = self.get_queue(&data.queue, QueueGroup::Waiting);
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
 
@@ -56,7 +55,7 @@ impl Storel {
       let set = self.delays.get(&data.queue);
       set.add(&mut txw, score, id.as_bytes())?;
     } else {
-      queue.push(&mut txw, id.as_bytes())?;
+      waiting.push(&mut txw, id.as_bytes())?;
       is_push = true;
     }
     self.tasks.put(&mut txw, id.as_bytes(), data)?;
@@ -64,35 +63,35 @@ impl Storel {
     drop(writer);
 
     if is_push {
-      queue.publish(QueueEvent::Push).await;
+      waiting.publish(QueueEvent::Push).await;
     }
     Ok(id)
   }
 
-  pub async fn find_pending<S: AsRef<str>>(&self, queue: S) -> Result<Vec<TaskId>> {
+  pub async fn find_in_process<S: AsRef<str>>(&self, queue: S) -> Result<Vec<TaskId>> {
+    let in_process = self.get_queue(queue.as_ref(), QueueGroup::InProcess);
     let writer = self.env.read().await;
     let txr = writer.begin_ro_txn()?;
-    let queue_name = generate_key(queue.as_ref(), QueueSuffix::PENDING);
-    let tasks = self.queues.get(queue_name).iter(&txr)?;
 
-    tasks
+    in_process
+      .iter(&txr)?
       .map(|res| res.map(|val| TaskId::from_slice(val).unwrap()))
       .collect()
   }
 
   pub async fn find_new<S: AsRef<str>>(&self, queue: S) -> Result<Task> {
     let queue = queue.as_ref();
-    let waiting = self.queues.get(generate_key(queue, QueueSuffix::WAITING));
-    let pending = self.queues.get(generate_key(queue, QueueSuffix::PENDING));
+    let waiting = self.get_queue(queue, QueueGroup::Waiting);
+    let in_process = self.get_queue(queue, QueueGroup::InProcess);
     loop {
       let writer = self.env.write().await;
       let mut txw = writer.begin_rw_txn()?;
 
       if let Some(el) = waiting.pop(&mut txw)? {
-        // If there is a task, push it to the pending queue
+        // If there is a task, push it to the in_process queue
         let id = TaskId::from_slice(el).expect("uuid from value");
         let id_bytes = id.as_bytes();
-        pending.push(&mut txw, id_bytes)?;
+        in_process.push(&mut txw, id_bytes)?;
         let mut data = self.tasks.get(&txw, id_bytes)?.expect("task data");
         // Increment task's deliveries counter
         data.deliveries += 1;
@@ -121,11 +120,8 @@ impl Storel {
   pub async fn finish(&self, task: Task) -> Result<bool> {
     let (id, data) = task.into_parts();
     let id = id.as_bytes();
-    
-    let pending = self
-      .queues
-      .get(generate_key(&data.queue, QueueSuffix::PENDING));
-    let done = self.queues.get(generate_key(&data.queue, QueueSuffix::DONE));
+    let in_process = self.get_queue(&data.queue, QueueGroup::InProcess);
+    let done = self.get_queue(&data.queue, QueueGroup::Done);
 
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
@@ -134,7 +130,7 @@ impl Storel {
       data.status = data.status;
       data.message = data.message;
       data.finished_on = now_as_millis();
-      pending.remove(&mut txw, 1, id)?;
+      in_process.remove(&mut txw, 1, id)?;
       done.push(&mut txw, id)?;
       self.tasks.put(&mut txw, id, &data)?;
       txw.commit()?;
@@ -153,12 +149,10 @@ impl Storel {
       if (data.deliveries - 1) < data.retry {
         let score = time_to_delay(backoff_time(data.deliveries as u64));
 
-        let pending = self
-          .queues
-          .get(generate_key(&data.queue, QueueSuffix::PENDING));
+        let in_process = self.get_queue(&data.queue, QueueGroup::InProcess);
         let delayed = self.delays.get(&data.queue);
 
-        pending.remove(&mut txw, 1, id)?;
+        in_process.remove(&mut txw, 1, id)?;
         delayed.add(&mut txw, score, id)?;
         txw.commit()?;
         return Ok(true);
@@ -173,9 +167,7 @@ impl Storel {
 
   pub async fn schedule_delayed<S: AsRef<str>>(&self, queue: S) -> Result<()> {
     let queue = queue.as_ref();
-    let waiting = self
-      .queues
-      .get(generate_key(queue, QueueSuffix::WAITING));
+    let waiting = self.get_queue(queue, QueueGroup::Waiting);
     let delayed = self.delays.get(queue);
     let max = now_as_millis();
     let writer = self.env.write().await;
@@ -197,21 +189,28 @@ impl Storel {
     Q: AsRef<str>,
     I: Send + Iterator<Item = TaskId>,
   {
-    let pending = self
-      .queues
-      .get(generate_key(queue.as_ref(), QueueSuffix::PENDING));
-    let waiting = self
-      .queues
-      .get(generate_key(queue.as_ref(), QueueSuffix::WAITING));
+    let in_process = self.get_queue(queue.as_ref(), QueueGroup::InProcess);
+    let waiting = self.get_queue(queue.as_ref(), QueueGroup::Waiting);
     let writer = self.env.write().await;
     let mut txw = writer.begin_rw_txn()?;
 
     for id in ids {
       let id_bytes = id.as_bytes();
-      pending.remove(&mut txw, 1, id_bytes)?;
+      in_process.remove(&mut txw, 1, id_bytes)?;
       waiting.push(&mut txw, id_bytes)?;
     }
     txw.commit()
+  }
+
+  fn get_queue(&self, queue: &str, group: QueueGroup) -> Queue {
+    let suffix = match group {
+      QueueGroup::InProcess => QueueSuffix::IN_PROCESS,
+      QueueGroup::Done => QueueSuffix::DONE,
+      QueueGroup::Waiting => QueueSuffix::WAITING,
+    };
+
+    let queue_name = format!("{}_{}", queue, suffix);
+    self.queues.get(queue_name)
   }
 }
 
@@ -230,10 +229,6 @@ fn time_to_delay(delay: u64) -> u64 {
   } else {
     u64::MAX
   }
-}
-
-fn generate_key(queue: &str, suffix: &str) -> String {
-  format!("{}_{}", queue, suffix)
 }
 
 /// Return the current time in milliseconds as u64
@@ -269,7 +264,13 @@ fn backoff_time(count: u64) -> u64 {
 
 struct QueueSuffix;
 impl QueueSuffix {
-  const PENDING: &'static str = "pending";
+  const IN_PROCESS: &'static str = "inprocess";
   const DONE: &'static str = "done";
   const WAITING: &'static str = "waiting";
+}
+
+enum QueueGroup {
+  InProcess,
+  Done,
+  Waiting,
 }
