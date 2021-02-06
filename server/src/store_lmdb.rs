@@ -4,6 +4,8 @@ use embed::{Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub use embed::Error as StoreError;
+
 #[derive(Debug, Clone)]
 pub struct Storel {
   env: Arc<RwLock<Environment>>,
@@ -117,7 +119,7 @@ impl Storel {
     }
   }
 
-  pub async fn finish(&self, task: Task) -> Result<bool> {
+  pub async fn finish(&self, task: Task) -> Result<()> {
     let (id, data) = task.into_parts();
     let id = id.as_bytes();
     let in_process = self.get_queue(&data.queue, QueueGroup::InProcess);
@@ -134,12 +136,12 @@ impl Storel {
       done.push(&mut txw, id)?;
       self.tasks.put(&mut txw, id, &data)?;
       txw.commit()?;
-      return Ok(true);
+      return Ok(());
     }
-    Ok(false)
+    Err(StoreError::NotFound)
   }
 
-  pub async fn retry(&self, task: Task) -> Result<bool> {
+  pub async fn retry(&self, task: Task) -> Result<()> {
     let id = task.id().as_bytes();
 
     let writer = self.env.write().await;
@@ -155,14 +157,14 @@ impl Storel {
         in_process.remove(&mut txw, 1, id)?;
         delayed.add(&mut txw, score, id)?;
         txw.commit()?;
-        return Ok(true);
+        return Ok(());
       } else {
         txw.abort();
         drop(writer);
         return self.finish(task).await;
       }
     }
-    Ok(false)
+    Err(StoreError::NotFound)
   }
 
   pub async fn schedule_delayed<S: AsRef<str>>(&self, queue: S) -> Result<()> {

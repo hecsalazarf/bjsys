@@ -1,8 +1,8 @@
 use crate::dispatcher::Dispatcher;
+use crate::store_lmdb::StoreError;
 use proto::{AckRequest, FetchResponse};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
-use tonic::Status;
 use uuid::Uuid;
 
 pub use proto::{TaskData, TaskStatus};
@@ -105,14 +105,14 @@ impl std::borrow::Borrow<Uuid> for InProcessTask {
 }
 
 pub struct TaskStream {
-  stream: mpsc::Receiver<Result<Task, Status>>,
+  stream: mpsc::Receiver<Result<Task, StoreError>>,
   dispatcher: Dispatcher,
   id: u64,
 }
 
 impl TaskStream {
   pub fn new(
-    stream: mpsc::Receiver<Result<Task, Status>>,
+    stream: mpsc::Receiver<Result<Task, StoreError>>,
     dispatcher: Dispatcher,
     id: u64,
   ) -> Self {
@@ -133,18 +133,23 @@ impl Drop for TaskStream {
 }
 
 mod stream {
-  use super::{FetchResponse, Status, TaskStream};
+  use super::{FetchResponse, TaskStream};
   use core::task::Poll;
   use futures_util::stream::Stream;
   use std::{pin::Pin, task::Context};
+  use tonic::Status;
 
   impl Stream for TaskStream {
     type Item = Result<FetchResponse, Status>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-      self
-        .stream
-        .poll_recv(cx)
-        .map(|o| o.map(|r| r.map(|task| FetchResponse::from(task))))
+      self.stream.poll_recv(cx).map(|o| {
+        o.map(|r| {
+          r.map(|task| FetchResponse::from(task)).map_err(|e| {
+            tracing::error!("Consumer cannot fetch task {}", e);
+            Status::unavailable("Internal error")
+          })
+        })
+      })
     }
   }
 }

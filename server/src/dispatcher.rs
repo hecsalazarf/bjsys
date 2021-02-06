@@ -1,16 +1,12 @@
 use crate::manager::Manager;
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
-use crate::store_lmdb::Storel;
+use crate::store_lmdb::{StoreError, Storel};
 use crate::task::{Task, TaskId, TaskStream};
-use embed::Error as StoreError;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify, Semaphore};
-use tonic::Status;
-use tracing::{debug, error};
-use uuid::Uuid;
-use xactor::{message, Actor, Addr, Context as ActorContext, Error as ActorError, Handler};
+use xactor::{message, Actor, Addr, Context, Handler};
 
 pub struct MasterDispatcher {
   addr: Addr<MasterWorker>,
@@ -29,15 +25,12 @@ impl MasterDispatcher {
     Self { addr }
   }
 
-  pub async fn produce(&self, queue: String) -> Result<TaskStream, Status> {
-    let stream = self
+  pub async fn produce(&self, queue: String) -> xactor::Result<TaskStream> {
+    self
       .addr
       .call(QueueName(queue))
       .await
-      .unwrap()
-      .map_err(|_e| Status::unavailable(""))?;
-
-    Ok(stream)
+      .expect("call manager actor")
   }
 }
 
@@ -47,8 +40,7 @@ struct DispatcherValue {
   fetcher: Fetcher,
 }
 
-type DispatcherRecord = (Arc<String>, DispatcherValue);
-type Registration = Result<DispatcherRecord, ActorError>;
+type DispatcherRec = (Arc<String>, DispatcherValue);
 
 struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
@@ -57,7 +49,7 @@ struct MasterWorker {
 }
 
 impl MasterWorker {
-  async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
+  async fn register(&mut self, addr: Addr<Self>, queue: String) -> xactor::Result<DispatcherRec> {
     let queue = Arc::new(queue);
     let fetcher = Fetcher::start(queue.clone(), self.store.clone()).await?;
     let dispatcher = Dispatcher::start(
@@ -76,7 +68,7 @@ impl MasterWorker {
     Ok((queue, record))
   }
 
-  async fn start_stream(&self, record: DispatcherRecord) -> Result<TaskStream, ActorError> {
+  async fn start_stream(&self, record: DispatcherRec) -> xactor::Result<TaskStream> {
     let (tx, rx) = mpsc::channel(1);
 
     let exit = Arc::new(Notify::new());
@@ -114,7 +106,7 @@ impl MasterWorker {
   }
 }
 
-#[message(result = "Result<TaskStream, ActorError>")]
+#[message(result = "xactor::Result<TaskStream>")]
 struct QueueName(String);
 
 #[message]
@@ -128,9 +120,9 @@ impl Actor for MasterWorker {}
 impl Handler<QueueName> for MasterWorker {
   async fn handle(
     &mut self,
-    ctx: &mut ActorContext<Self>,
+    ctx: &mut Context<Self>,
     queue: QueueName,
-  ) -> Result<TaskStream, ActorError> {
+  ) -> xactor::Result<TaskStream> {
     let queue = queue.0;
 
     let record = if let Some(r) = self.dispatchers.get_key_value(&queue) {
@@ -146,7 +138,7 @@ impl Handler<QueueName> for MasterWorker {
 
 #[tonic::async_trait]
 impl Handler<MasterCmd> for MasterWorker {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, cmd: MasterCmd) {
+  async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: MasterCmd) {
     match cmd {
       MasterCmd::Unregister(queue) => self.unregister(queue).await,
     };
@@ -191,7 +183,7 @@ impl Dispatcher {
     self.addr.call(DispatcherCmd::Detach(consumer)).await
   }
 
-  pub async fn active_tasks(&self) -> xactor::Result<Vec<Weak<Uuid>>> {
+  pub async fn active_tasks(&self) -> xactor::Result<Vec<Weak<TaskId>>> {
     self.addr.call(ActiveTasks).await
   }
 }
@@ -253,7 +245,7 @@ impl DispatcherActor {
     }
   }
 
-  fn active_tasks(&mut self) -> Vec<Weak<Uuid>> {
+  fn active_tasks(&mut self) -> Vec<Weak<TaskId>> {
     let map = self.consumers.iter().filter_map(|(_, value)| {
       // Map all active tasks being processed, returning its ID
       value.in_process.as_ref().map(|id| id.clone())
@@ -265,7 +257,7 @@ impl DispatcherActor {
 
 #[tonic::async_trait]
 impl Actor for DispatcherActor {
-  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
+  async fn stopped(&mut self, _ctx: &mut Context<Self>) {
     self.remove_all_consumers();
     // Inform master to drop this address
     self
@@ -274,10 +266,10 @@ impl Actor for DispatcherActor {
       .await
       .unwrap();
     self.scheduler.stop().expect("stop scheduler");
-    debug!("Dispatcher for '{}' stopped", self.queue);
+    tracing::debug!("Dispatcher for '{}' stopped", self.queue);
   }
 
-  async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+  async fn started(&mut self, ctx: &mut Context<Self>) -> xactor::Result<()> {
     ctx
       .subscribe::<ServiceCmd>()
       .await
@@ -289,7 +281,7 @@ impl Actor for DispatcherActor {
         addr: ctx.address(),
       })
       .await?;
-    debug!("Dispatcher for '{}' started", self.queue);
+    tracing::debug!("Dispatcher for '{}' started", self.queue);
     Ok(())
   }
 }
@@ -302,12 +294,12 @@ enum DispatcherCmd {
   Drop(u64),
 }
 
-#[message(result = "Vec<Weak<Uuid>>")]
+#[message(result = "Vec<Weak<TaskId>>")]
 struct ActiveTasks;
 
 #[tonic::async_trait]
 impl Handler<DispatcherCmd> for DispatcherActor {
-  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: DispatcherCmd) {
+  async fn handle(&mut self, ctx: &mut Context<Self>, cmd: DispatcherCmd) {
     match cmd {
       DispatcherCmd::Attach(id, t) => {
         self.attach_to(id, t);
@@ -329,14 +321,14 @@ impl Handler<DispatcherCmd> for DispatcherActor {
 
 #[tonic::async_trait]
 impl Handler<ActiveTasks> for DispatcherActor {
-  async fn handle(&mut self, _ctx: &mut ActorContext<Self>, _: ActiveTasks) -> Vec<Weak<Uuid>> {
+  async fn handle(&mut self, _ctx: &mut Context<Self>, _: ActiveTasks) -> Vec<Weak<TaskId>> {
     self.active_tasks()
   }
 }
 
 #[tonic::async_trait]
 impl Handler<ServiceCmd> for DispatcherActor {
-  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ServiceCmd) {
+  async fn handle(&mut self, ctx: &mut Context<Self>, cmd: ServiceCmd) {
     match cmd {
       ServiceCmd::Shutdown => {
         ctx.stop(None);
@@ -424,12 +416,12 @@ impl FetcherHandle {
 
 #[tonic::async_trait]
 impl Actor for FetcherActor {
-  async fn stopped(&mut self, _ctx: &mut ActorContext<Self>) {
-    debug!("Fetcher for '{}' stopped", self.queue);
+  async fn stopped(&mut self, _ctx: &mut Context<Self>) {
+    tracing::debug!("Fetcher for '{}' stopped", self.queue);
   }
 
-  async fn started(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    debug!("Fetcher for '{}' started", self.queue);
+  async fn started(&mut self, _ctx: &mut Context<Self>) -> xactor::Result<()> {
+    tracing::debug!("Fetcher for '{}' started", self.queue);
     Ok(())
   }
 }
@@ -440,7 +432,7 @@ struct GetHandle;
 
 #[tonic::async_trait]
 impl Handler<GetHandle> for FetcherActor {
-  async fn handle(&mut self, _: &mut ActorContext<Self>, _: GetHandle) -> FetcherHandle {
+  async fn handle(&mut self, _: &mut Context<Self>, _: GetHandle) -> FetcherHandle {
     self.get_handle().await
   }
 }
@@ -466,7 +458,7 @@ pub struct ConsumerValue {
 /// waiting tasks.
 pub struct Consumer {
   manager: Manager,
-  tx: mpsc::Sender<Result<Task, Status>>,
+  tx: mpsc::Sender<Result<Task, StoreError>>,
   dispatcher: Dispatcher,
   fetcher: Fetcher,
   queue: Arc<String>,
@@ -504,20 +496,12 @@ impl Consumer {
       tokio::select! {
         // Wait for the first future to complete, either new task or exit signal
         res = handler.fetch() => {
-          match res {
-            Err(e) => {
-              // On error, send error status to client
-              error!("Cannot read task {}", e);
-              self
-                .tx
-                .send(Err(Status::unavailable("unavailable")))
-                .await
-                .expect("send task");
-            }
-            Ok(t) => {
-              // Send the new task to the client
-              self.respond(t, id).await;
-            }
+          if let Ok(t) = res {
+            // Send the new task to the client
+            self.respond(t, id).await;
+          } else {
+            // On error, send error status to client
+            self.tx.send(res).await.expect("consumer sends task");
           }
         }
         _ = self.exit.notified() => {
@@ -532,16 +516,16 @@ impl Consumer {
 
 #[tonic::async_trait]
 impl Actor for Consumer {
-  async fn stopped(&mut self, ctx: &mut ActorContext<Self>) {
-    debug!(
+  async fn stopped(&mut self, ctx: &mut Context<Self>) {
+    tracing::debug!(
       "Consumer [{}] disconnected from '{}'",
       ctx.actor_id(),
       self.queue
     );
   }
 
-  async fn started(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-    debug!(
+  async fn started(&mut self, ctx: &mut Context<Self>) -> xactor::Result<()> {
+    tracing::debug!(
       "Consumer [{}] connected to '{}'",
       ctx.actor_id(),
       self.queue
@@ -552,7 +536,7 @@ impl Actor for Consumer {
 
 #[tonic::async_trait]
 impl Handler<ConsumerCmd> for Consumer {
-  async fn handle(&mut self, ctx: &mut ActorContext<Self>, cmd: ConsumerCmd) {
+  async fn handle(&mut self, ctx: &mut Context<Self>, cmd: ConsumerCmd) {
     match cmd {
       ConsumerCmd::Fetch => self.fetch(ctx.actor_id()).await,
     }

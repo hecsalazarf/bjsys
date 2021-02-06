@@ -2,7 +2,7 @@ use crate::dispatcher::MasterDispatcher;
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
 use crate::store::ConnectionInfo;
-use crate::store_lmdb::Storel;
+use crate::store_lmdb::{StoreError, Storel};
 use crate::task::TaskStream;
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
@@ -112,13 +112,23 @@ impl TasksCore for TasksServiceImpl {
       .ack(task)
       .await
       .map(|_| Response::new(Empty::default()))
+      .map_err(|e| {
+        if e == StoreError::NotFound {
+          Status::invalid_argument("Task is not pending")
+        } else {
+          Status::unavailable("Service not available")
+        }
+      })
   }
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<FetchRequest>) -> ServiceResult<Self::FetchStream> {
     request.intercept()?;
     let payload = request.into_inner();
-    let stream = self.dispatcher.produce(payload.queue).await?;
+    let stream = self.dispatcher.produce(payload.queue).await.map_err(|e| {
+      tracing::error!("Cannot start stream {}", e);
+      Status::unavailable("Internal error")
+    })?;
 
     Ok(Response::new(stream))
   }
