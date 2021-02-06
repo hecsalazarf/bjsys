@@ -1,5 +1,4 @@
 use crate::dispatcher::Dispatcher;
-use crate::manager::Manager;
 use proto::{AckRequest, FetchResponse};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
@@ -59,18 +58,16 @@ impl From<Task> for FetchResponse {
 }
 
 #[derive(Clone)]
-pub struct WaitingTask {
+pub struct InProcessTask {
   id: Arc<Uuid>,
   notify: Arc<Notify>,
-  manager: Manager,
 }
 
-impl WaitingTask {
-  pub fn new(id: Uuid, manager: Manager) -> Self {
+impl InProcessTask {
+  pub fn new(id: Uuid) -> Self {
     Self {
       id: Arc::new(id),
       notify: Arc::new(Notify::new()),
-      manager,
     }
   }
 
@@ -82,31 +79,26 @@ impl WaitingTask {
     self.notify.notified().await;
   }
 
-  pub fn finish(self) {
-    self.notify.notify_one();
-    self.manager.finish(self.id);
-  }
-
-  pub fn acked(&self) {
+  pub fn ack(&self) {
     self.notify.notify_one();
   }
 }
 
-impl std::hash::Hash for WaitingTask {
+impl std::hash::Hash for InProcessTask {
   fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
     self.id.hash(state);
   }
 }
 
-impl PartialEq for WaitingTask {
+impl PartialEq for InProcessTask {
   fn eq(&self, other: &Self) -> bool {
     self.id == other.id
   }
 }
 
-impl Eq for WaitingTask {}
+impl Eq for InProcessTask {}
 
-impl std::borrow::Borrow<Uuid> for WaitingTask {
+impl std::borrow::Borrow<Uuid> for InProcessTask {
   fn borrow(&self) -> &Uuid {
     self.id.as_ref()
   }

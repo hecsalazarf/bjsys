@@ -1,7 +1,7 @@
 use crate::store_lmdb::Storel;
-use crate::task::{WaitingTask, Task, TaskStatus};
+use crate::task::{InProcessTask, Task, TaskStatus};
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::Weak;
 use tonic::Status;
 use uuid::Uuid;
 use xactor::{message, Actor, Addr, Context, Handler};
@@ -25,8 +25,8 @@ impl Manager {
       .expect("call ack task")
   }
 
-  pub fn in_process(&self, task_id: Uuid) -> WaitingTask {
-    let waiting = WaitingTask::new(task_id, self.clone());
+  pub fn in_process(&self, task_id: Uuid) -> InProcessTask {
+    let waiting = InProcessTask::new(task_id);
     self
       .actor
       .send(AckCmd::InProcess(waiting.clone()))
@@ -34,7 +34,7 @@ impl Manager {
     waiting
   }
 
-  pub fn finish(&self, uuid: Arc<Uuid>) {
+  pub fn finish(&self, uuid: Weak<Uuid>) {
     self
       .actor
       .send(AckCmd::Finish(uuid))
@@ -44,15 +44,15 @@ impl Manager {
 
 #[message]
 pub enum AckCmd {
-  InProcess(WaitingTask),
-  Finish(Arc<Uuid>),
+  InProcess(InProcessTask),
+  Finish(Weak<Uuid>),
 }
 
 #[message(result = "Result<(), Status>")]
 struct Acknowledge(Task);
 
 struct ManagerActor {
-  tasks: HashSet<WaitingTask>,
+  tasks: HashSet<InProcessTask>,
   store: Storel,
 }
 
@@ -64,12 +64,16 @@ impl ManagerActor {
     }
   }
 
-  fn in_process(&mut self, task: WaitingTask) {
+  fn in_process(&mut self, task: InProcessTask) {
     self.tasks.insert(task);
   }
 
-  fn remove_active(&mut self, id: Arc<Uuid>) {
-    self.tasks.remove(id.as_ref());
+  fn finish(&mut self, id: Weak<Uuid>) {
+    if let Some(id) = id.upgrade() {
+      if let Some(task) = self.tasks.take(id.as_ref()) {
+        task.ack();
+      }
+    }
   }
 
   async fn ack(&mut self, task: Task) -> Result<(), Status> {
@@ -91,7 +95,7 @@ impl ManagerActor {
             status
           );
           if let Some(t) = self.tasks.take(&id) {
-            t.acked();
+            t.ack();
           }
         }
         Ok(())
@@ -111,7 +115,7 @@ impl Handler<AckCmd> for ManagerActor {
   async fn handle(&mut self, _ctx: &mut Context<Self>, cmd: AckCmd) {
     match cmd {
       AckCmd::InProcess(t) => self.in_process(t),
-      AckCmd::Finish(id) => self.remove_active(id),
+      AckCmd::Finish(id) => self.finish(id),
     }
   }
 }

@@ -2,7 +2,7 @@ use crate::manager::Manager;
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
 use crate::store_lmdb::Storel;
-use crate::task::{TaskStream, WaitingTask, Task};
+use crate::task::{Task, TaskId, TaskStream};
 use embed::Error as StoreError;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -60,7 +60,13 @@ impl MasterWorker {
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> Registration {
     let queue = Arc::new(queue);
     let fetcher = Fetcher::start(queue.clone(), self.store.clone()).await?;
-    let dispatcher = Dispatcher::start(queue.clone(), addr, self.store.clone()).await?;
+    let dispatcher = Dispatcher::start(
+      queue.clone(),
+      addr,
+      self.store.clone(),
+      self.manager.clone(),
+    )
+    .await?;
 
     let record = DispatcherValue {
       dispatcher,
@@ -93,7 +99,7 @@ impl MasterWorker {
 
     let cv = ConsumerValue {
       _addr: worker_addr,
-      pending_task: None,
+      in_process: None,
       exit,
     };
     dispatcher.init_consumer(id, cv).await?;
@@ -158,8 +164,9 @@ impl Dispatcher {
     queue: Arc<String>,
     master: Addr<MasterWorker>,
     store: Storel,
+    manager: Manager,
   ) -> xactor::Result<Self> {
-    let actor = DispatcherActor::new(queue, master, store);
+    let actor = DispatcherActor::new(queue, master, store, manager);
     let addr = actor.start().await?;
     Ok(Self { addr })
   }
@@ -176,7 +183,7 @@ impl Dispatcher {
     self.addr.call(DispatcherCmd::Init(consumer, val)).await
   }
 
-  pub async fn attach_to(&self, consumer: u64, task: WaitingTask) -> xactor::Result<()> {
+  pub async fn attach_to(&self, consumer: u64, task: Weak<TaskId>) -> xactor::Result<()> {
     self.addr.call(DispatcherCmd::Attach(consumer, task)).await
   }
 
@@ -194,10 +201,11 @@ struct DispatcherActor {
   master: Addr<MasterWorker>,
   queue: Arc<String>,
   scheduler: Scheduler,
+  manager: Manager,
 }
 
 impl DispatcherActor {
-  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: Storel) -> Self {
+  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: Storel, manager: Manager) -> Self {
     let consumers = HashMap::new();
     let scheduler = Scheduler::new(queue.clone(), store);
     Self {
@@ -205,46 +213,50 @@ impl DispatcherActor {
       master,
       consumers,
       scheduler,
+      manager,
     }
   }
 
   fn remove_consumer(&mut self, id: u64) -> usize {
     // Never fails as it was previously created
     let cv = self.consumers.remove(&id).unwrap();
-    Self::stop_consumer(cv);
+    self.stop_consumer(cv);
     self.consumers.len()
   }
 
   fn remove_all_consumers(&mut self) {
     let all = self.consumers.drain();
     for (_, cv) in all {
-      Self::stop_consumer(cv);
+      if let Some(id) = cv.in_process {
+        self.manager.finish(id);
+      }
+      cv.exit.notify_one();
     }
   }
 
-  fn stop_consumer(cv: ConsumerValue) {
-    if let Some(task) = cv.pending_task {
-      task.finish();
+  fn stop_consumer(&self, cv: ConsumerValue) {
+    if let Some(id) = cv.in_process {
+      self.manager.finish(id);
     }
     cv.exit.notify_one();
   }
 
-  fn attach_to(&mut self, id: u64, task: WaitingTask) {
+  fn attach_to(&mut self, id: u64, task: Weak<TaskId>) {
     if let Some(consumer) = self.consumers.get_mut(&id) {
-      consumer.pending_task = Some(task);
+      consumer.in_process = Some(task);
     }
   }
 
   fn detach_from(&mut self, id: u64) {
     if let Some(consumer) = self.consumers.get_mut(&id) {
-      consumer.pending_task.take();
+      consumer.in_process.take();
     }
   }
 
   fn active_tasks(&mut self) -> Vec<Weak<Uuid>> {
     let map = self.consumers.iter().filter_map(|(_, value)| {
       // Map all active tasks being processed, returning its ID
-      value.pending_task.as_ref().map(|task| task.id())
+      value.in_process.as_ref().map(|id| id.clone())
     });
 
     map.collect()
@@ -284,7 +296,7 @@ impl Actor for DispatcherActor {
 
 #[message]
 enum DispatcherCmd {
-  Attach(u64, WaitingTask),
+  Attach(u64, Weak<TaskId>),
   Detach(u64),
   Init(u64, ConsumerValue),
   Drop(u64),
@@ -445,7 +457,7 @@ pub struct ConsumerValue {
   /// Actor address of `Consumer`.
   _addr: Addr<Consumer>,
   /// Indicates that a pending task is in progress.
-  pending_task: Option<WaitingTask>,
+  in_process: Option<Weak<TaskId>>,
   /// Exit signal
   exit: Arc<Notify>,
 }
@@ -471,7 +483,7 @@ impl Consumer {
     // dropped as well.
     self
       .dispatcher
-      .attach_to(id, current_task.clone())
+      .attach_to(id, current_task.id())
       .await
       .unwrap_or(());
     self.tx.send(Ok(task)).await.expect("send incoming task");
