@@ -115,7 +115,7 @@ impl Queue {
   }
 
   /// Create an iterator over the elements of the queue.
-  pub fn iter<'txn, T>(&self, txn: &'txn T) -> Result<QueueIter<'txn>>
+  pub fn iter<'txn, T>(&self, txn: &'txn T) -> Result<QueueIter<'txn, '_>>
   where
     T: Transaction,
   {
@@ -163,24 +163,24 @@ impl Queue {
     key
   }
 
-  pub fn iter_from_cursor<'txn, C>(&self, cursor: &mut C) -> QueueIter<'txn>
+  pub fn iter_from_cursor<'txn, C>(&self, cursor: &mut C) -> QueueIter<'txn, '_>
   where
     C: Cursor<'txn>,
   {
     QueueIter {
       inner: cursor.iter_from(self.uuid.as_bytes()),
-      uuid: self.uuid,
+      uuid: &self.uuid,
     }
   }
 }
 
 /// Iterator on queue's elements.
-pub struct QueueIter<'txn> {
+pub struct QueueIter<'txn, 'q> {
   inner: Iter<'txn>,
-  uuid: Uuid,
+  uuid: &'q Uuid,
 }
 
-impl<'txn> QueueIter<'txn> {
+impl<'txn> QueueIter<'txn, '_> {
   fn next_inner(&mut self) -> Option<Result<(&'txn [u8], &'txn [u8])>> {
     let next = self.inner.next();
     if let Some(Ok((key, _))) = next {
@@ -199,7 +199,7 @@ impl<'txn> QueueIter<'txn> {
   }
 }
 
-impl<'txn> Iterator for QueueIter<'txn> {
+impl<'txn> Iterator for QueueIter<'txn, '_> {
   type Item = Result<&'txn [u8]>;
 
   fn next(&mut self) -> Option<Self::Item> {

@@ -53,7 +53,7 @@ impl SortedSet {
 
   /// Return all the elements in the sorted set with a score between `range`.
   /// The elements are considered to be sorted from low to high scores.
-  pub fn range_by_score<'txn, T, R>(&self, txn: &'txn T, range: R) -> Result<SortedRange<'txn>>
+  pub fn range_by_score<'txn, T, R>(&self, txn: &'txn T, range: R) -> Result<SortedRange<'txn, '_>>
   where
     T: Transaction,
     R: RangeBounds<u64>,
@@ -63,7 +63,7 @@ impl SortedSet {
     let (start, end) = self.to_bytes_range(range);
     let mut cursor = txn.open_ro_cursor(self.skiplist)?;
     let iter = cursor.iter_from(start);
-    let uuid = self.uuid;
+    let uuid = &self.uuid;
 
     Ok(SortedRange { end, iter, uuid })
   }
@@ -190,13 +190,13 @@ impl SortedSet {
 
 /// Iterator with elements returned after calling `SortedSet::range_by_score`.
 #[derive(Debug)]
-pub struct SortedRange<'txn> {
+pub struct SortedRange<'txn, 's> {
   end: Bound<BoundLimit>,
   iter: Iter<'txn>,
-  uuid: Uuid,
+  uuid: &'s Uuid,
 }
 
-impl<'txn> SortedRange<'txn> {
+impl<'txn> SortedRange<'txn, '_> {
   fn next_inner(&mut self) -> Option<Result<&'txn [u8]>> {
     let res = self.iter.next()?;
     if let Err(e) = res {
@@ -220,7 +220,7 @@ impl<'txn> SortedRange<'txn> {
   }
 }
 
-impl<'txn> Iterator for SortedRange<'txn> {
+impl<'txn> Iterator for SortedRange<'txn, '_> {
   type Item = Result<&'txn [u8]>;
 
   fn next(&mut self) -> Option<Self::Item> {
