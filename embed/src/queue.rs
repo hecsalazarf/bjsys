@@ -78,7 +78,7 @@ impl Queue {
   pub fn pop<'txn>(&self, txn: &'txn mut RwTransaction) -> Result<Option<&'txn [u8]>> {
     let mut txn = txn.begin_nested_txn()?;
     let mut cursor = txn.open_rw_cursor(self.elements)?;
-    let iter = cursor.iter_from(self.uuid.as_bytes());
+    let iter = self.iter_from_cursor(&mut cursor);
     let opt_pop = iter.take(1).next().transpose()?;
 
     if opt_pop.is_some() {
@@ -88,7 +88,7 @@ impl Queue {
     drop(cursor);
     txn.commit()?;
 
-    Ok(opt_pop.map(|(_, val)| val))
+    Ok(opt_pop)
   }
 
   /// Remove the first `count` elements equal to `val` from the queue.
@@ -120,11 +120,8 @@ impl Queue {
     T: Transaction,
   {
     let mut cursor = txn.open_ro_cursor(self.elements)?;
-
-    Ok(QueueIter {
-      inner: cursor.iter_from(self.uuid.as_bytes()),
-      uuid: self.uuid,
-    })
+    let iter = self.iter_from_cursor(&mut cursor);
+    Ok(iter)
   }
 
   /// Returns and removes the head element of the queue, and pushes the element
@@ -152,10 +149,7 @@ impl Queue {
 
   /// Publish an `event` to the queue's channel.
   pub async fn publish(&self, evt: QueueEvent) {
-    self
-      .subscriptions
-      .publish(&self.uuid, evt)
-      .await
+    self.subscriptions.publish(&self.uuid, evt).await
   }
 
   fn encode_members_key(&self, index: &[u8]) -> ElementKey {
@@ -167,6 +161,16 @@ impl Queue {
       .zip(chain)
       .for_each(|(new, chained)| *new = *chained);
     key
+  }
+
+  pub fn iter_from_cursor<'txn, C>(&self, cursor: &mut C) -> QueueIter<'txn>
+  where
+    C: Cursor<'txn>,
+  {
+    QueueIter {
+      inner: cursor.iter_from(self.uuid.as_bytes()),
+      uuid: self.uuid,
+    }
   }
 }
 
@@ -400,8 +404,8 @@ mod tests {
   fn pop() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
     let queue_db = QueueDb::open(&env)?;
-    let queue_1 = queue_db.get("myqueue");
-    let queue_2 = queue_db.get("anotherqueue");
+    let queue_1 = queue_db.get("myqueue_waiting");
+    let queue_2 = queue_db.get("myqueue_inprocess");
 
     let mut tx = env.begin_rw_txn()?;
     queue_1.push(&mut tx, "Y")?;
