@@ -1,28 +1,28 @@
-use lmdb::{Environment, EnvironmentBuilder as Builder, Result};
+use crate::environment::Env;
+use lmdb::{EnvironmentBuilder as Builder, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Once, RwLock as StdRwLock};
-use tokio::sync::RwLock;
+use std::sync::{Once, RwLock};
 
 /// A singleton that controls access to environments.
-/// 
-/// This manager enforces that only one `Environment` at specfic `Path`
+///
+/// This manager enforces that only one `Env` at specfic `Path`
 /// exists in a process.
 #[derive(Debug)]
 pub struct Manager {
-  envs: HashMap<PathBuf, Arc<RwLock<Environment>>>,
+  envs: HashMap<PathBuf, Env>,
 }
 
 impl Manager {
   /// Returns the 'Manager' singleton.
-  pub fn singleton() -> &'static StdRwLock<Manager> {
+  pub fn singleton() -> &'static RwLock<Manager> {
     static START: Once = Once::new();
-    static mut MANAGER: Option<StdRwLock<Manager>> = None;
+    static mut MANAGER: Option<RwLock<Manager>> = None;
 
     // Safe because we only mutate once in a synchronized fashion
     unsafe {
       START.call_once(|| {
-        let manager = StdRwLock::new(Manager {
+        let manager = RwLock::new(Manager {
           envs: HashMap::new(),
         });
         MANAGER = Some(manager);
@@ -31,9 +31,8 @@ impl Manager {
     }
   }
 
-  /// Gets an existant `Environment` at specified `path` or creates one from the `builder`.
-  /// The `Environment` is wrapped by an `Arc`, so it can be safely shared across threads.
-  pub fn get_or_init<P>(&mut self, builder: Builder, path: P) -> Result<Arc<RwLock<Environment>>>
+  /// Gets an existant `Env` at specified `path` or creates one from the `builder`.
+  pub fn get_or_init<P>(&mut self, builder: Builder, path: P) -> Result<Env>
   where
     P: AsRef<Path>,
   {
@@ -42,7 +41,7 @@ impl Manager {
       return Ok(env.clone());
     }
 
-    let env = Arc::new(RwLock::new(builder.open(path)?));
+    let env = Env::new(builder.open(path)?);
     self.envs.insert(path.into(), env.clone());
 
     Ok(env)
@@ -64,7 +63,7 @@ mod tests {
     for _ in 0..3 {
       // Call get_or_init 3 times
       let mut manager = singleton.write().unwrap();
-      manager.get_or_init(Environment::new(), tmp_dir.path())?;
+      manager.get_or_init(lmdb::Environment::new(), tmp_dir.path())?;
     }
     let manager = singleton.read().unwrap();
     // Only one environment created
