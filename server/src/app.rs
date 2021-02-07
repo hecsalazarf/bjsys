@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::service::{Runnable, TaskService};
-use crate::store::RedisServer;
-use std::{ffi::OsString, path::PathBuf, process::Child};
+use std::{ffi::OsString, path::PathBuf};
 use tracing_subscriber::filter::EnvFilter;
 
 pub struct Builder {
@@ -44,17 +43,13 @@ impl Builder {
       Self::init_tracing(filter, &config);
     }
 
-    let _redis = Self::boot_storage(&self.working_dir, &config);
-    let service = TaskService::init(config.redis_conn()).await;
+    let service = TaskService::init().await;
     if let Err(e) = &service {
       exit(e);
     }
     let service = service.unwrap();
-    App {
-      service,
-      config,
-      _redis,
-    }
+
+    App { service, config }
   }
 
   fn init_tracing(filter: EnvFilter, config: &Config) {
@@ -71,19 +66,6 @@ impl Builder {
       .with_timer(ChronoLocal::with_format(String::from("%FT%T%.3f%Z")))
       .with_target(target)
       .init();
-  }
-
-  fn boot_storage(dir: &std::path::Path, config: &Config) -> Child {
-    let redis_res = RedisServer::new()
-      .with_dir(dir)
-      .with_log("redis.log")
-      .boot(config.redis_conn());
-
-    if let Err(e) = redis_res {
-      exit(format!("Redis failed to boot: {}", e));
-    }
-
-    redis_res.unwrap()
   }
 }
 
@@ -105,7 +87,6 @@ impl Default for Builder {
 pub struct App {
   service: TaskService,
   config: Config,
-  _redis: Child,
 }
 
 impl App {

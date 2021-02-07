@@ -1,7 +1,7 @@
 use crate::manager::Manager;
+use crate::repository::{RepoError, Repository};
 use crate::scheduler::Scheduler;
 use crate::service::ServiceCmd;
-use crate::store_lmdb::{StoreError, Storel};
 use crate::task::{Task, TaskId, TaskStream};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -13,10 +13,10 @@ pub struct MasterDispatcher {
 }
 
 impl MasterDispatcher {
-  pub async fn init(store: &Storel, manager: &Manager) -> Self {
+  pub async fn init(repo: &Repository, manager: &Manager) -> Self {
     let worker = MasterWorker {
       dispatchers: HashMap::new(),
-      store: store.clone(),
+      repo: repo.clone(),
       manager: manager.clone(),
     };
 
@@ -44,21 +44,16 @@ type DispatcherRec = (Arc<String>, DispatcherValue);
 
 struct MasterWorker {
   dispatchers: HashMap<Arc<String>, DispatcherValue>,
-  store: Storel,
+  repo: Repository,
   manager: Manager,
 }
 
 impl MasterWorker {
   async fn register(&mut self, addr: Addr<Self>, queue: String) -> xactor::Result<DispatcherRec> {
     let queue = Arc::new(queue);
-    let fetcher = Fetcher::start(queue.clone(), self.store.clone()).await?;
-    let dispatcher = Dispatcher::start(
-      queue.clone(),
-      addr,
-      self.store.clone(),
-      self.manager.clone(),
-    )
-    .await?;
+    let fetcher = Fetcher::start(queue.clone(), self.repo.clone()).await?;
+    let dispatcher =
+      Dispatcher::start(queue.clone(), addr, self.repo.clone(), self.manager.clone()).await?;
 
     let record = DispatcherValue {
       dispatcher,
@@ -155,10 +150,10 @@ impl Dispatcher {
   async fn start(
     queue: Arc<String>,
     master: Addr<MasterWorker>,
-    store: Storel,
+    repo: Repository,
     manager: Manager,
   ) -> xactor::Result<Self> {
-    let actor = DispatcherActor::new(queue, master, store, manager);
+    let actor = DispatcherActor::new(queue, master, repo, manager);
     let addr = actor.start().await?;
     Ok(Self { addr })
   }
@@ -197,9 +192,14 @@ struct DispatcherActor {
 }
 
 impl DispatcherActor {
-  fn new(queue: Arc<String>, master: Addr<MasterWorker>, store: Storel, manager: Manager) -> Self {
+  fn new(
+    queue: Arc<String>,
+    master: Addr<MasterWorker>,
+    repo: Repository,
+    manager: Manager,
+  ) -> Self {
     let consumers = HashMap::new();
-    let scheduler = Scheduler::new(queue.clone(), store);
+    let scheduler = Scheduler::new(queue.clone(), repo);
     Self {
       queue,
       master,
@@ -347,8 +347,8 @@ pub struct Fetcher {
 
 impl Fetcher {
   /// Creates a new `FetcherActor` for `queue`.
-  pub async fn start(queue: Arc<String>, store: Storel) -> xactor::Result<Self> {
-    let actor = FetcherActor::new(queue, store);
+  pub async fn start(queue: Arc<String>, repo: Repository) -> xactor::Result<Self> {
+    let actor = FetcherActor::new(queue, repo);
     let addr = actor.start().await?;
     Ok(Self { addr })
   }
@@ -369,17 +369,17 @@ struct FetcherActor {
   /// Queue name.
   queue: Arc<String>,
   /// Storage DB.
-  store: Storel,
-  /// Semaphore that controls access to the the store.
+  repo: Repository,
+  /// Semaphore that controls access to the the repo.
   semaph: Arc<Semaphore>,
 }
 
 impl FetcherActor {
-  fn new(queue: Arc<String>, store: Storel) -> Self {
+  fn new(queue: Arc<String>, repo: Repository) -> Self {
     let semaph = Arc::new(Semaphore::new(1));
     Self {
       queue,
-      store,
+      repo,
       semaph,
     }
   }
@@ -387,7 +387,7 @@ impl FetcherActor {
   async fn get_handle(&self) -> FetcherHandle {
     FetcherHandle {
       semaph: self.semaph.clone(),
-      store: self.store.clone(),
+      repo: self.repo.clone(),
       queue: self.queue.clone(),
     }
   }
@@ -397,10 +397,10 @@ impl FetcherActor {
 /// in sequence. This guarantees that consumers fetch tasks in the order they
 /// arrive.
 pub struct FetcherHandle {
-  /// Semaphore that controls access to the the store.
+  /// Semaphore that controls access to the the repo.
   semaph: Arc<Semaphore>,
   /// Underlying storage DB
-  store: Storel,
+  repo: Repository,
   /// Queue name
   queue: Arc<String>,
 }
@@ -408,9 +408,9 @@ pub struct FetcherHandle {
 impl FetcherHandle {
   /// Fetch tasks from storage. If there is a running handle, this method
   /// blocks until the precedent handle completed.
-  pub async fn fetch(&self) -> Result<Task, StoreError> {
+  pub async fn fetch(&self) -> Result<Task, RepoError> {
     let _permit = self.semaph.acquire().await.expect("acquire fetch");
-    self.store.find_new(self.queue.as_ref()).await
+    self.repo.find_new(self.queue.as_ref()).await
   }
 }
 
@@ -458,7 +458,7 @@ pub struct ConsumerValue {
 /// waiting tasks.
 pub struct Consumer {
   manager: Manager,
-  tx: mpsc::Sender<Result<Task, StoreError>>,
+  tx: mpsc::Sender<Result<Task, RepoError>>,
   dispatcher: Dispatcher,
   fetcher: Fetcher,
   queue: Arc<String>,

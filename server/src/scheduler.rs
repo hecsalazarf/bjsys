@@ -1,5 +1,5 @@
 use crate::dispatcher::Dispatcher;
-use crate::store_lmdb::Storel;
+use crate::repository::Repository;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};
@@ -10,8 +10,8 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-  pub fn new(queue: Arc<String>, store: Storel) -> Self {
-    let instance = QueueScheduler::new(store, queue);
+  pub fn new(queue: Arc<String>, repo: Repository) -> Self {
+    let instance = QueueScheduler::new(repo, queue);
     Self { inner: instance }
   }
 
@@ -39,28 +39,28 @@ enum QueueScheduler {
 }
 
 impl QueueScheduler {
-  fn new(store: Storel, queue: Arc<String>) -> Self {
-    QueueScheduler::Inst(Some(SchedulerWorker::new(store, queue)))
+  fn new(repo: Repository, queue: Arc<String>) -> Self {
+    QueueScheduler::Inst(Some(SchedulerWorker::new(repo, queue)))
   }
 }
 
 struct SchedulerWorker {
-  store: Storel,
+  repo: Repository,
   dispatcher: Option<Dispatcher>,
   queue: Arc<String>,
 }
 
 impl SchedulerWorker {
-  pub fn new(store: Storel, queue: Arc<String>) -> Self {
+  pub fn new(repo: Repository, queue: Arc<String>) -> Self {
     Self {
-      store,
+      repo,
       queue,
       dispatcher: None,
     }
   }
 
   async fn poll_delayed(&mut self) {
-    if let Err(e) = self.store.schedule_delayed(self.queue.as_ref()).await {
+    if let Err(e) = self.repo.schedule_delayed(self.queue.as_ref()).await {
       error!(
         "Failed to schedule delayed tasks of '{}': {}",
         self.queue, e
@@ -70,7 +70,7 @@ impl SchedulerWorker {
 
   async fn poll_stalled(&mut self) {
     let queue = self.queue.as_ref();
-    let pending = match self.store.find_in_process(queue).await {
+    let pending = match self.repo.find_in_process(queue).await {
       Err(e) => {
         error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
         Vec::new()
@@ -104,7 +104,7 @@ impl SchedulerWorker {
         found.is_none()
       });
 
-      if let Err(e) = self.store.renqueue(queue, stalled).await {
+      if let Err(e) = self.repo.renqueue(queue, stalled).await {
         error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
       }
     }

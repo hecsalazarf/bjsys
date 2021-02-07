@@ -2,17 +2,17 @@ use crate::task::{Task, TaskData, TaskId};
 use embed::collections::{Queue, QueueDb, QueueEvent, SortedSetDb};
 use embed::{Env, Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
 
-pub use embed::Error as StoreError;
+pub use embed::Error as RepoError;
 
 #[derive(Debug, Clone)]
-pub struct Storel {
+pub struct Repository {
   env: Env,
   tasks: Store<TaskData>,
   queues: QueueDb,
   delays: SortedSetDb,
 }
 
-impl Storel {
+impl Repository {
   pub async fn open() -> Result<Self> {
     let manager = Manager::singleton();
     // TODO: Pass configuration as arguments
@@ -127,7 +127,7 @@ impl Storel {
       txw.commit()?;
       return Ok(());
     }
-    Err(StoreError::NotFound)
+    Err(RepoError::NotFound)
   }
 
   pub async fn retry(&self, task: Task) -> Result<()> {
@@ -151,7 +151,7 @@ impl Storel {
         return self.finish(task).await;
       }
     }
-    Err(StoreError::NotFound)
+    Err(RepoError::NotFound)
   }
 
   pub async fn schedule_delayed<S: AsRef<str>>(&self, queue: S) -> Result<()> {

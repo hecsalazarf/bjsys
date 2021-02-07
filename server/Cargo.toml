@@ -11,7 +11,6 @@ tokio = { version = "1.1.1", features = ["macros", "sync", "time", "rt-multi-thr
 futures-util = "0.3.12"
 tracing = "0.1.22"
 tracing-subscriber = "0.2.15"
-redis = { version = "0.19.0", default-features = false, features = ["tokio-comp", "script"] }
 xactor = { version = "0.7.11", default-features = false, features = ["runtime-tokio"] }
 rand = "0.8.2"
 uuid = { version = "0.8.2", features = ["v4"] }

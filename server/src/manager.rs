@@ -1,4 +1,4 @@
-use crate::store_lmdb::{StoreError, Storel};
+use crate::repository::{RepoError, Repository};
 use crate::task::{InProcessTask, Task, TaskId, TaskStatus};
 use std::collections::HashSet;
 use std::sync::Weak;
@@ -10,12 +10,12 @@ pub struct Manager {
 }
 
 impl Manager {
-  pub async fn init(store: &Storel) -> Result<Self, Box<dyn std::error::Error>> {
-    let actor = ManagerActor::new(&store).start().await?;
+  pub async fn init(repo: &Repository) -> Result<Self, Box<dyn std::error::Error>> {
+    let actor = ManagerActor::new(&repo).start().await?;
     Ok(Self { actor })
   }
 
-  pub async fn ack(&self, task: Task) -> Result<(), StoreError> {
+  pub async fn ack(&self, task: Task) -> Result<(), RepoError> {
     self
       .actor
       .call(Acknowledge(task))
@@ -46,19 +46,19 @@ pub enum AckCmd {
   Finish(Weak<TaskId>),
 }
 
-#[message(result = "Result<(), StoreError>")]
+#[message(result = "Result<(), RepoError>")]
 struct Acknowledge(Task);
 
 struct ManagerActor {
   tasks: HashSet<InProcessTask>,
-  store: Storel,
+  repo: Repository,
 }
 
 impl ManagerActor {
-  pub fn new(store: &Storel) -> Self {
+  pub fn new(repo: &Repository) -> Self {
     Self {
       tasks: HashSet::new(),
-      store: store.clone(),
+      repo: repo.clone(),
     }
   }
 
@@ -74,13 +74,13 @@ impl ManagerActor {
     }
   }
 
-  async fn ack(&mut self, task: Task) -> Result<(), StoreError> {
+  async fn ack(&mut self, task: Task) -> Result<(), RepoError> {
     let id = *task.id();
     let status = task.status();
     let res = match status {
-      TaskStatus::Done => self.store.finish(task).await,
-      TaskStatus::Failed => self.store.retry(task).await,
-      TaskStatus::Canceled => self.store.finish(task).await,
+      TaskStatus::Done => self.repo.finish(task).await,
+      TaskStatus::Failed => self.repo.retry(task).await,
+      TaskStatus::Canceled => self.repo.finish(task).await,
     };
 
     if let Err(e) = res {
@@ -110,13 +110,13 @@ impl Handler<AckCmd> for ManagerActor {
 
 #[tonic::async_trait]
 impl Handler<Acknowledge> for ManagerActor {
-  async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), StoreError> {
+  async fn handle(&mut self, _ctx: &mut Context<Self>, req: Acknowledge) -> Result<(), RepoError> {
     let task = req.0;
     if self.tasks.contains(task.id()) {
       // Report task only if it's pending
       self.ack(task).await
     } else {
-      Err(StoreError::NotFound)
+      Err(RepoError::NotFound)
     }
   }
 }

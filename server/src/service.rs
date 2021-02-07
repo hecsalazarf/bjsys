@@ -1,8 +1,7 @@
 use crate::dispatcher::MasterDispatcher;
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
-use crate::store::ConnectionInfo;
-use crate::store_lmdb::{StoreError, Storel};
+use crate::repository::{RepoError, Repository};
 use crate::task::TaskStream;
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
@@ -25,8 +24,8 @@ pub struct TaskService {
 }
 
 impl TaskService {
-  pub async fn init(redis_info: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
-    let inner = TasksServiceImpl::init(redis_info).await?;
+  pub async fn init() -> Result<Self, Box<dyn std::error::Error>> {
+    let inner = TasksServiceImpl::init().await?;
     let router = Server::builder().add_service(TasksCoreServer::new(inner));
 
     let service = Self { router };
@@ -45,22 +44,20 @@ impl Runnable for TaskService {
 }
 
 struct TasksServiceImpl {
-  // This store must be used ONLY for non-blocking operations
-  // store: MultiplexedStore,
   manager: Manager,
   dispatcher: MasterDispatcher,
-  store: Storel,
+  repo: Repository,
 }
 
 impl TasksServiceImpl {
-  pub async fn init(_redis_conn: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
-    let m_store = Storel::open().await?;
-    let manager = Manager::init(&m_store).await?;
-    let dispatcher = MasterDispatcher::init(&m_store, &manager).await;
-    let store = Storel::open().await?;
+  pub async fn init() -> Result<Self, Box<dyn std::error::Error>> {
+    let repo = Repository::open().await?;
+    let manager = Manager::init(&repo).await?;
+    let dispatcher = MasterDispatcher::init(&repo, &manager).await;
+    let repo = Repository::open().await?;
 
     let service = Self {
-      store,
+      repo,
       manager,
       dispatcher,
     };
@@ -85,7 +82,7 @@ impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
     let task_data = request.into_inner().into();
-    let res = self.store.create(&task_data).await;
+    let res = self.repo.create(&task_data).await;
 
     res
       .map(|id| {
@@ -113,7 +110,7 @@ impl TasksCore for TasksServiceImpl {
       .await
       .map(|_| Response::new(Empty::default()))
       .map_err(|e| {
-        if e == StoreError::NotFound {
+        if e == RepoError::NotFound {
           Status::invalid_argument("Task is not pending")
         } else {
           Status::unavailable("Service not available")

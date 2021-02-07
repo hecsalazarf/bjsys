@@ -1,5 +1,5 @@
 use crate::dispatcher::Dispatcher;
-use crate::store_lmdb::StoreError;
+use crate::repository::RepoError;
 use proto::{AckRequest, FetchResponse};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
@@ -105,14 +105,14 @@ impl std::borrow::Borrow<Uuid> for InProcessTask {
 }
 
 pub struct TaskStream {
-  stream: mpsc::Receiver<Result<Task, StoreError>>,
+  stream: mpsc::Receiver<Result<Task, RepoError>>,
   dispatcher: Dispatcher,
   id: u64,
 }
 
 impl TaskStream {
   pub fn new(
-    stream: mpsc::Receiver<Result<Task, StoreError>>,
+    stream: mpsc::Receiver<Result<Task, RepoError>>,
     dispatcher: Dispatcher,
     id: u64,
   ) -> Self {
