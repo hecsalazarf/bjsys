@@ -1,14 +1,12 @@
 use crate::task::{Task, TaskData, TaskId};
 use embed::collections::{Queue, QueueDb, QueueEvent, SortedSetDb};
-use embed::{Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use embed::{Env, Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
 
 pub use embed::Error as StoreError;
 
 #[derive(Debug, Clone)]
 pub struct Storel {
-  env: Arc<RwLock<Environment>>,
+  env: Env,
   tasks: Store<TaskData>,
   queues: QueueDb,
   delays: SortedSetDb,
@@ -20,7 +18,6 @@ impl Storel {
     // TODO: Pass configuration as arguments
     let mut env_flags = EnvironmentFlags::empty();
     env_flags.set(EnvironmentFlags::NO_SYNC, true);
-    env_flags.set(EnvironmentFlags::NO_LOCK, true);
     let mut builder = Environment::new();
     builder
       .set_map_size(1024 * 1024 * 1024)
@@ -28,14 +25,12 @@ impl Storel {
       .set_flags(env_flags);
     let env = manager
       .write()
-      .expect("write guard")
+      .expect("manager write guard")
       .get_or_init(builder, "/tmp/bjsys")?;
 
-    let wr_env = env.write().await;
-    let tasks = Store::open(&wr_env, "tasks")?;
-    let queues = QueueDb::open(&wr_env)?;
-    let delays = SortedSetDb::open(&wr_env)?;
-    drop(wr_env);
+    let tasks = Store::open(&env, "tasks")?;
+    let queues = QueueDb::open(&env)?;
+    let delays = SortedSetDb::open(&env)?;
 
     Ok(Self {
       env,
@@ -48,8 +43,7 @@ impl Storel {
   pub async fn create(&self, data: &TaskData) -> Result<TaskId> {
     let mut is_push = false;
     let waiting = self.get_queue(&data.queue, QueueGroup::Waiting);
-    let writer = self.env.write().await;
-    let mut txw = writer.begin_rw_txn()?;
+    let mut txw = self.env.begin_rw_txn_async().await?;
 
     let id = TaskId::new_v4();
     if data.delay > 0 {
@@ -62,7 +56,6 @@ impl Storel {
     }
     self.tasks.put(&mut txw, id.as_bytes(), data)?;
     txw.commit()?;
-    drop(writer);
 
     if is_push {
       waiting.publish(QueueEvent::Push).await;
@@ -72,8 +65,7 @@ impl Storel {
 
   pub async fn find_in_process<S: AsRef<str>>(&self, queue: S) -> Result<Vec<TaskId>> {
     let in_process = self.get_queue(queue.as_ref(), QueueGroup::InProcess);
-    let writer = self.env.read().await;
-    let txr = writer.begin_ro_txn()?;
+    let txr = self.env.begin_ro_txn()?;
 
     in_process
       .iter(&txr)?
@@ -86,8 +78,7 @@ impl Storel {
     let waiting = self.get_queue(queue, QueueGroup::Waiting);
     let in_process = self.get_queue(queue, QueueGroup::InProcess);
     loop {
-      let writer = self.env.write().await;
-      let mut txw = writer.begin_rw_txn()?;
+      let mut txw = self.env.begin_rw_txn_async().await?;
 
       if let Some(el) = waiting.pop(&mut txw)? {
         // If there is a task, push it to the in_process queue
@@ -107,7 +98,6 @@ impl Storel {
 
       // If no available task, drop transaction not to block other threads
       txw.abort();
-      drop(writer);
       // Subscribe for queue events
       let mut sub = waiting.subscribe().await;
       loop {
@@ -125,8 +115,7 @@ impl Storel {
     let in_process = self.get_queue(&data.queue, QueueGroup::InProcess);
     let done = self.get_queue(&data.queue, QueueGroup::Done);
 
-    let writer = self.env.write().await;
-    let mut txw = writer.begin_rw_txn()?;
+    let mut txw = self.env.begin_rw_txn_async().await?;
 
     if let Some(mut data) = self.tasks.get(&txw, id)? {
       data.status = data.status;
@@ -144,8 +133,7 @@ impl Storel {
   pub async fn retry(&self, task: Task) -> Result<()> {
     let id = task.id().as_bytes();
 
-    let writer = self.env.write().await;
-    let mut txw = writer.begin_rw_txn()?;
+    let mut txw = self.env.begin_rw_txn_async().await?;
 
     if let Some(data) = self.tasks.get(&txw, id)? {
       if (data.deliveries - 1) < data.retry {
@@ -160,7 +148,6 @@ impl Storel {
         return Ok(());
       } else {
         txw.abort();
-        drop(writer);
         return self.finish(task).await;
       }
     }
@@ -172,8 +159,7 @@ impl Storel {
     let waiting = self.get_queue(queue, QueueGroup::Waiting);
     let delayed = self.delays.get(queue);
     let max = now_as_millis();
-    let writer = self.env.write().await;
-    let mut txw = writer.begin_rw_txn()?;
+    let mut txw = self.env.begin_rw_txn_async().await?;
 
     for res in delayed.range_by_score(&txw, ..max)? {
       let id = res?;
@@ -193,8 +179,7 @@ impl Storel {
   {
     let in_process = self.get_queue(queue.as_ref(), QueueGroup::InProcess);
     let waiting = self.get_queue(queue.as_ref(), QueueGroup::Waiting);
-    let writer = self.env.write().await;
-    let mut txw = writer.begin_rw_txn()?;
+    let mut txw = self.env.begin_rw_txn_async().await?;
 
     for id in ids {
       let id_bytes = id.as_bytes();
