@@ -21,7 +21,11 @@ impl Env {
   }
 
   /// Asynchronously create a read-write transaction for use with the environment. This method
-  /// will yield while there are any other read-write transactions open on the environment.
+  /// will yield while there are any other read-write transaction open on the environment.
+  /// 
+  /// # Note
+  /// Only for single process access. Multi-process access will still block the thread if there
+  /// is an active read-write transaction.
   pub async fn begin_rw_txn_async<'env>(&'env self) -> Result<RwTxn<'env>> {
     self.inner.begin_rw_txn_async().await
   }
