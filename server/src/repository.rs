@@ -1,5 +1,5 @@
 use crate::task::{Task, TaskData, TaskId};
-use embed::collections::{Queue, QueueDb, QueueEvent, SortedSetDb};
+use embed::collections::{QueueDb, QueueEvent, SortedSetDb};
 use embed::{Env, EnvironmentBuilder, EnvironmentFlags, Manager, Result, Store, Transaction};
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ impl RepoBuilder {
     let storage = RepoStorage {
       tasks: Store::open(&env, "tasks")?,
       queues: QueueDb::open(&env)?,
-      delays: SortedSetDb::open(&env)?,
+      sorted_sets: SortedSetDb::open(&env)?,
     };
 
     Ok(Repository {
@@ -71,7 +71,7 @@ impl Default for RepoBuilder {
 struct RepoStorage {
   tasks: Store<TaskData>,
   queues: QueueDb,
-  delays: SortedSetDb,
+  sorted_sets: SortedSetDb,
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ impl Repository {
     let id = TaskId::new_v4();
     if data.delay > 0 {
       let score = time_to_delay(data.delay);
-      let set = self.delays().get(&data.queue);
+      let set = self.sorted_set(&data.queue);
       set.add(&mut txw, score, id.as_bytes())?;
     } else {
       waiting.push(&mut txw, id.as_bytes())?;
@@ -177,7 +177,6 @@ impl Repository {
 
   pub async fn retry(&self, task: Task) -> Result<()> {
     let id = task.id().as_bytes();
-
     let mut txw = self.env.begin_rw_txn_async().await?;
 
     if let Some(data) = self.tasks().get(&txw, id)? {
@@ -185,7 +184,7 @@ impl Repository {
         let score = time_to_delay(backoff_time(data.deliveries as u64));
 
         let in_process = self.queue(&data.queue, QueueGroup::InProcess);
-        let delayed = self.delays().get(&data.queue);
+        let delayed = self.sorted_set(&data.queue);
 
         in_process.remove(&mut txw, 1, id)?;
         delayed.add(&mut txw, score, id)?;
@@ -202,7 +201,7 @@ impl Repository {
   pub async fn schedule_delayed<S: AsRef<str>>(&self, queue: S) -> Result<()> {
     let queue = queue.as_ref();
     let waiting = self.queue(queue, QueueGroup::Waiting);
-    let delayed = self.delays().get(queue);
+    let delayed = self.sorted_set(queue);
     let max = now_as_millis();
     let mut txw = self.env.begin_rw_txn_async().await?;
 
@@ -234,7 +233,7 @@ impl Repository {
     txw.commit()
   }
 
-  fn queue(&self, queue: &str, group: QueueGroup) -> Queue {
+  fn queue(&self, queue: &str, group: QueueGroup) -> embed::collections::Queue {
     let suffix = match group {
       QueueGroup::InProcess => QueueSuffix::IN_PROCESS,
       QueueGroup::Done => QueueSuffix::DONE,
@@ -245,8 +244,8 @@ impl Repository {
     self.storage.queues.get(queue_name)
   }
 
-  fn delays(&self) -> &SortedSetDb {
-    &self.storage.delays
+  fn sorted_set(&self, queue: &str) -> embed::collections::SortedSet {
+    self.storage.sorted_sets.get(queue)
   }
 
   fn tasks(&self) -> &Store<TaskData> {
