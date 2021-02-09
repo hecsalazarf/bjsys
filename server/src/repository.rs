@@ -1,8 +1,68 @@
 use crate::task::{Task, TaskData, TaskId};
 use embed::collections::{Queue, QueueDb, QueueEvent, SortedSetDb};
-use embed::{Env, Environment, EnvironmentFlags, Manager, Result, Store, Transaction};
+use embed::{Env, EnvironmentBuilder, EnvironmentFlags, Manager, Result, Store, Transaction};
+use std::path::Path;
 
 pub use embed::Error as RepoError;
+
+#[derive(Debug)]
+pub struct RepoBuilder {
+  env_builder: EnvironmentBuilder,
+  env_flags: EnvironmentFlags,
+}
+
+impl RepoBuilder {
+  pub fn _no_sync(&mut self, active: bool) -> &mut Self {
+    self.env_flags.set(EnvironmentFlags::NO_SYNC, active);
+    self
+  }
+
+  pub fn _map_size(&mut self, size: usize) -> &mut Self {
+    self.env_builder.set_map_size(size);
+    self
+  }
+
+  pub fn open<P: AsRef<Path>>(mut self, path: P) -> Result<Repository> {
+    self.env_builder.set_flags(self.env_flags);
+
+    let env = Manager::singleton()
+      .write()
+      .expect("manager write guard")
+      .get_or_init(self.env_builder, path)?;
+
+    let tasks = Store::open(&env, "tasks")?;
+    let queues = QueueDb::open(&env)?;
+    let delays = SortedSetDb::open(&env)?;
+
+    Ok(Repository {
+      env,
+      tasks,
+      queues,
+      delays,
+    })
+  }
+}
+
+impl Default for RepoBuilder {
+  fn default() -> Self {
+    let mut env_flags = EnvironmentFlags::empty();
+    env_flags.insert(EnvironmentFlags::NO_SYNC);
+    env_flags.insert(EnvironmentFlags::NO_SUB_DIR);
+    let mut env_builder = embed::Environment::new();
+
+    env_builder
+      // 1Gb of data is about 3 millions of tasks
+      .set_map_size(1024 * 1024 * 1024)
+      // No particular reason, currently less than 10 Dbs are needed
+      .set_max_dbs(10)
+      .set_flags(env_flags);
+
+    Self {
+      env_builder,
+      env_flags,
+    }
+  }
+}
 
 #[derive(Debug, Clone)]
 pub struct Repository {
@@ -13,31 +73,8 @@ pub struct Repository {
 }
 
 impl Repository {
-  pub async fn open() -> Result<Self> {
-    let manager = Manager::singleton();
-    // TODO: Pass configuration as arguments
-    let mut env_flags = EnvironmentFlags::empty();
-    env_flags.set(EnvironmentFlags::NO_SYNC, true);
-    let mut builder = Environment::new();
-    builder
-      .set_map_size(1024 * 1024 * 1024)
-      .set_max_dbs(20)
-      .set_flags(env_flags);
-    let env = manager
-      .write()
-      .expect("manager write guard")
-      .get_or_init(builder, "/tmp/bjsys")?;
-
-    let tasks = Store::open(&env, "tasks")?;
-    let queues = QueueDb::open(&env)?;
-    let delays = SortedSetDb::open(&env)?;
-
-    Ok(Self {
-      env,
-      tasks,
-      queues,
-      delays,
-    })
+  pub fn build() -> RepoBuilder {
+    RepoBuilder::default()
   }
 
   pub async fn create(&self, data: &TaskData) -> Result<TaskId> {
