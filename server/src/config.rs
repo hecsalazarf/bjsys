@@ -6,6 +6,7 @@ use tracing_subscriber::filter::LevelFilter;
 pub struct Config {
   socket: SocketAddr,
   log_filter: LevelFilter,
+  sync: bool,
 }
 
 impl Config {
@@ -27,6 +28,11 @@ impl Config {
     self.log_filter
   }
 
+  pub fn is_sync(&self) -> bool {
+    self.sync
+  }
+
+
   fn merge_cli(&mut self, args: Vec<OsString>) {
     let matches = Self::cli_matches(args);
 
@@ -38,6 +44,9 @@ impl Config {
         Self::exit(&format!("Invalid port '{}'", port_str));
       }
     }
+
+    // Sync
+    self.sync = matches.is_present(ArgName::SYNC);
 
     // Log filter
     if let Some(filter) = matches.value_of(ArgName::LOG_FILTER) {
@@ -67,9 +76,18 @@ impl Config {
           .takes_value(true),
       )
       .arg(
+        Arg::with_name(ArgName::SYNC)
+          .short("s")
+          .long("sync")
+          .help("Flush system buffers to disk on every transaction")
+          .long_help(
+            "Flush system buffers to disk on every transaction.
+This guarantees ACID properties but decreases performance.",
+          ),
+      )
+      .arg(
         Arg::with_name(ArgName::LOG_FILTER)
-          .short("l")
-          .long("loglevel")
+          .long("log-level")
           .help(&format!(
             "Log level (default: {})",
             DefaultValue::LOG_FILTER
@@ -90,8 +108,13 @@ impl Default for Config {
   fn default() -> Self {
     let socket = SocketAddr::new(DefaultValue::HOST.parse().unwrap(), DefaultValue::PORT);
     let log_filter = DefaultValue::LOG_FILTER;
+    let sync = false;
 
-    Self { socket, log_filter }
+    Self {
+      socket,
+      log_filter,
+      sync,
+    }
   }
 }
 
@@ -110,6 +133,7 @@ struct ArgName;
 impl ArgName {
   const PORT: &'static str = "PORT";
   const LOG_FILTER: &'static str = "LOG_FILTER";
+  const SYNC: &'static str = "SYNC";
 }
 
 struct DefaultValue;

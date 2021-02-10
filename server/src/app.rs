@@ -1,7 +1,10 @@
 use crate::config::Config;
-use crate::service::{Runnable, TaskService};
 use crate::repository::Repository;
-use std::{ffi::OsString, path::PathBuf};
+use crate::service::{Runnable, TaskService};
+use std::{
+  ffi::OsString,
+  path::{Path, PathBuf},
+};
 use tracing_subscriber::filter::EnvFilter;
 
 pub struct Builder {
@@ -44,11 +47,10 @@ impl Builder {
       Self::init_tracing(filter, &config);
     }
 
-    let repo = Self::init_storage(&self.working_dir);
+    let repo = Self::init_storage(&self.working_dir, &config);
     if let Err(e) = repo {
       exit(e);
     }
-    
     let service = TaskService::init(repo.unwrap()).await;
     if let Err(e) = service {
       exit(e);
@@ -74,9 +76,10 @@ impl Builder {
       .init();
   }
 
-  fn init_storage(path: &std::path::Path) -> Result<Repository, Box<dyn std::error::Error>> {
+  fn init_storage(path: &Path, config: &Config) -> Result<Repository, Box<dyn std::error::Error>> {
     tracing::info!("Initializing storage");
-    let builder = Repository::build();
+    let mut builder = Repository::build();
+    builder.sync(config.is_sync());
     let repo = builder.open(path.join("bjsys"))?;
     Ok(repo)
   }

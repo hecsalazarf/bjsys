@@ -12,13 +12,8 @@ pub struct RepoBuilder {
 }
 
 impl RepoBuilder {
-  pub fn _no_sync(&mut self, active: bool) -> &mut Self {
-    self.env_flags.set(EnvironmentFlags::NO_SYNC, active);
-    self
-  }
-
-  pub fn _map_size(&mut self, size: usize) -> &mut Self {
-    self.env_builder.set_map_size(size);
+  pub fn sync(&mut self, active: bool) -> &mut Self {
+    self.env_flags.set(EnvironmentFlags::NO_SYNC, !active);
     self
   }
 
