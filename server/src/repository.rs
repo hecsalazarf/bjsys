@@ -118,38 +118,40 @@ impl Repository {
       .collect()
   }
 
-  pub async fn find_new<S: AsRef<str>>(&self, queue: S) -> Result<Task> {
+  /// Retrieves next task to be processed from `queue` and move it to the InProcess queue.
+  pub async fn process_next<S: AsRef<str>>(&self, queue: S) -> Result<Option<Task>> {
     let queue = queue.as_ref();
     let waiting = self.queue(queue, QueueGroup::Waiting);
-    let in_process = self.queue(queue, QueueGroup::InProcess);
+    let mut txw = self.env.begin_rw_txn_async().await?;
+
+    if let Some(el) = waiting.pop(&mut txw)? {
+      // If there is a task, push it to the in_process queue
+      let id = TaskId::from_slice(el).expect("uuid from value");
+      let id_bytes = id.as_bytes();
+      let in_process = self.queue(queue, QueueGroup::InProcess);
+      in_process.push(&mut txw, id_bytes)?;
+      let mut data = self.tasks().get(&txw, id_bytes)?.expect("task data");
+      // Increment task's deliveries counter
+      data.deliveries += 1;
+      // Set time stamp
+      data.processed_on = now_as_millis();
+      // And then update it
+      self.tasks().put(&mut txw, id_bytes, &data)?;
+      txw.commit()?;
+      return Ok(Some(Task::from_parts(id, data)));
+    }
+    Ok(None)
+  }
+
+  /// Get notified when `queue` has been pushed with a new element.
+  pub async fn notified<S: AsRef<str>>(&self, queue: S) {
+    let waiting = self.queue(queue.as_ref(), QueueGroup::Waiting);
+    // Subscribe for queue events
+    let mut sub = waiting.subscribe().await;
     loop {
-      let mut txw = self.env.begin_rw_txn_async().await?;
-
-      if let Some(el) = waiting.pop(&mut txw)? {
-        // If there is a task, push it to the in_process queue
-        let id = TaskId::from_slice(el).expect("uuid from value");
-        let id_bytes = id.as_bytes();
-        in_process.push(&mut txw, id_bytes)?;
-        let mut data = self.tasks().get(&txw, id_bytes)?.expect("task data");
-        // Increment task's deliveries counter
-        data.deliveries += 1;
-        // Set time stamp
-        data.processed_on = now_as_millis();
-        // And then update it
-        self.tasks().put(&mut txw, id_bytes, &data)?;
-        txw.commit()?;
-        return Ok(Task::from_parts(id, data));
-      }
-
-      // If no available task, drop transaction not to block other threads
-      txw.abort();
-      // Subscribe for queue events
-      let mut sub = waiting.subscribe().await;
-      loop {
-        // Only listen to pushes
-        if sub.recv().await == QueueEvent::Push {
-          break;
-        }
+      // Only listen to pushes
+      if sub.recv().await == QueueEvent::Push {
+        break;
       }
     }
   }

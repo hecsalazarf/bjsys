@@ -384,7 +384,7 @@ impl FetcherActor {
     }
   }
 
-  async fn get_handle(&self) -> FetcherHandle {
+  fn get_handle(&self) -> FetcherHandle {
     FetcherHandle {
       semaph: self.semaph.clone(),
       repo: self.repo.clone(),
@@ -410,7 +410,13 @@ impl FetcherHandle {
   /// blocks until the precedent handle completed.
   pub async fn fetch(&self) -> Result<Task, RepoError> {
     let _permit = self.semaph.acquire().await.expect("acquire fetch");
-    self.repo.find_new(self.queue.as_ref()).await
+    let queue = self.queue.as_ref();
+    loop {
+      if let Some(task) = self.repo.process_next(queue).await? {
+        return Ok(task);
+      }
+      self.repo.notified(queue).await
+    }
   }
 }
 
@@ -433,7 +439,7 @@ struct GetHandle;
 #[tonic::async_trait]
 impl Handler<GetHandle> for FetcherActor {
   async fn handle(&mut self, _: &mut Context<Self>, _: GetHandle) -> FetcherHandle {
-    self.get_handle().await
+    self.get_handle()
   }
 }
 
