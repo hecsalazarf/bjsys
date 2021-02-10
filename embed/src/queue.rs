@@ -124,6 +124,17 @@ impl Queue {
     Ok(iter)
   }
 
+  /// Returns the element at `index`. The index is zero-based, so 0 means the first
+  /// element, 1 the second element and so on.
+  pub fn get<'txn, T>(&self, txn: &'txn T, index: usize) -> Result<Option<&'txn [u8]>>
+  where
+    T: Transaction,
+  {
+    let mut cursor = txn.open_ro_cursor(self.elements)?;
+    let iter = self.iter_from_cursor(&mut cursor);
+    iter.skip(index).take(1).next().transpose()
+  }
+
   /// Returns and removes the head element of the queue, and pushes the element
   /// at the tail of destination.
   pub fn pop_and_move<'txn>(
@@ -463,6 +474,25 @@ mod tests {
     let mut iter_2 = queue_2.iter(&tx)?;
     assert_eq!(Some(Ok(&[100][..])), iter_2.next());
     assert_eq!(None, iter_2.next());
+    Ok(())
+  }
+
+  #[test]
+  fn get() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let queue_db = QueueDb::open(&env)?;
+    let queue_1 = queue_db.get("myqueue1");
+
+    let mut tx = env.begin_rw_txn()?;
+    queue_1.push(&mut tx, "zero")?;
+    queue_1.push(&mut tx, "one")?;
+    queue_1.push(&mut tx, "two")?;
+    tx.commit()?;
+
+    let tx = env.begin_ro_txn()?;
+    assert_eq!(Ok(Some("zero".as_bytes())), queue_1.get(&tx, 0));
+    assert_eq!(Ok(Some("two".as_bytes())), queue_1.get(&tx, 2));
+    assert_eq!(Ok(None), queue_1.get(&tx, 3));
     Ok(())
   }
 
