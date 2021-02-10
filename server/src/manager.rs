@@ -10,7 +10,7 @@ pub struct Manager {
 }
 
 impl Manager {
-  pub async fn init(repo: &Repository) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(repo: &Repository) -> anyhow::Result<Self> {
     let actor = ManagerActor::new(&repo).start().await?;
     Ok(Self { actor })
   }

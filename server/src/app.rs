@@ -17,7 +17,7 @@ impl Builder {
   pub fn with_args<I, T>(mut self, args: I) -> Self
   where
     I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
+    T: Into<OsString>,
   {
     self.args = args.into_iter().map(|i| i.into()).collect();
     self
@@ -41,23 +41,16 @@ impl Builder {
     self
   }
 
-  pub async fn init(self) -> App {
+  pub async fn init(self) -> anyhow::Result<App> {
     let config = Config::from(self.args);
     if let Some(filter) = self.env_filter {
       Self::init_tracing(filter, &config);
     }
 
-    let repo = Self::init_storage(&self.working_dir, &config);
-    if let Err(e) = repo {
-      exit(e);
-    }
-    let service = TaskService::init(repo.unwrap()).await;
-    if let Err(e) = service {
-      exit(e);
-    }
-    let service = service.unwrap();
+    let repo = Self::init_storage(&self.working_dir, &config)?;
+    let service = TaskService::init(repo).await?;
 
-    App { service, config }
+    Ok(App { service, config })
   }
 
   fn init_tracing(filter: EnvFilter, config: &Config) {
@@ -76,11 +69,14 @@ impl Builder {
       .init();
   }
 
-  fn init_storage(path: &Path, config: &Config) -> Result<Repository, Box<dyn std::error::Error>> {
+  fn init_storage(path: &Path, config: &Config) -> anyhow::Result<Repository> {
+    use anyhow::Context;
     tracing::info!("Initializing storage");
     let mut builder = Repository::build();
     builder.sync(config.is_sync());
-    let repo = builder.open(path.join("bjsys"))?;
+    let repo = builder
+      .open(path.join("bjsys"))
+      .context("Failed to init storage")?;
     Ok(repo)
   }
 }
@@ -106,19 +102,17 @@ pub struct App {
 }
 
 impl App {
-  pub fn builder() -> Builder {
-    Builder::default()
+  pub async fn run() -> anyhow::Result<()> {
+    let app = Builder::default()
+      .with_args(std::env::args_os())
+      .with_tracing(true)
+      .init()
+      .await?;
+    app.listen().await
   }
 
-  pub async fn listen(self) {
-    let config = self.config;
-    if let Err(e) = self.service.listen_on(config.socket()).await {
-      exit(e);
-    }
+  async fn listen(self) -> anyhow::Result<()> {
+    self.service.listen_on(self.config.socket()).await?;
+    Ok(())
   }
-}
-
-fn exit<T: std::fmt::Display>(e: T) -> ! {
-  tracing::error!("{}", e);
-  std::process::exit(1)
 }

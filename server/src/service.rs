@@ -24,7 +24,7 @@ pub struct TaskService {
 }
 
 impl TaskService {
-  pub async fn init(repo: Repository) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(repo: Repository) -> anyhow::Result<Self> {
     let inner = TasksServiceImpl::init(repo).await?;
     let router = Server::builder().add_service(TasksCoreServer::new(inner));
 
@@ -50,7 +50,7 @@ struct TasksServiceImpl {
 }
 
 impl TasksServiceImpl {
-  pub async fn init(repo: Repository) -> Result<Self, Box<dyn std::error::Error>> {
+  pub async fn init(repo: Repository) -> anyhow::Result<Self> {
     let manager = Manager::init(&repo).await?;
     let dispatcher = MasterDispatcher::init(&repo, &manager).await;
 

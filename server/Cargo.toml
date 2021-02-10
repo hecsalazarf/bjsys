@@ -15,5 +15,6 @@ xactor = { version = "0.7.11", default-features = false, features = ["runtime-to
 rand = "0.8.2"
 uuid = { version = "0.8.2", features = ["v4"] }
 clap = { version = "2.33.3", default-features = false }
+anyhow = "1.0.38"
 proto = { path = "../proto", features = ["server"] }
 embed = { path = "../embed" }
