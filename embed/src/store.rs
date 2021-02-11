@@ -15,7 +15,7 @@ pub struct Store<D> {
 
 impl<D> Store<D> {
   /// Open a store with the provided database name.
-  /// 
+  ///
   /// # Note
   /// Stores are not meant to be opened more than once, since there is no way
   /// (yet) to know if a store was previously operated on a different data type.
@@ -64,7 +64,7 @@ impl<D> Store<D> {
     txn.del(self.database, &key.as_ref(), None)
   }
 
-  /// Return an iterator positioned at first key greater than or equal to the specified key.
+  /// Returns an iterator positioned at first key greater than or equal to the specified key.
   pub fn iter_from<'txn, K, T>(&self, txn: &'txn T, key: K) -> Result<StoreIter<'txn, D>>
   where
     K: AsRef<[u8]>,
@@ -72,6 +72,16 @@ impl<D> Store<D> {
   {
     let mut cursor = txn.open_ro_cursor(self.database)?;
     let iter = cursor.iter_from(key);
+    Ok(StoreIter::new(iter))
+  }
+
+  /// Returns an iterator positioned at the last key and iterating backwards.
+  pub fn iter_end_backwards<'txn, T>(&self, txn: &'txn T) -> Result<StoreIter<'txn, D>>
+  where
+    T: Transaction,
+  {
+    let mut cursor = txn.open_ro_cursor(self.database)?;
+    let iter = cursor.iter_end_backwards();
     Ok(StoreIter::new(iter))
   }
 }
@@ -129,19 +139,23 @@ mod tests {
   }
 
   #[test]
-  fn iter_from() -> Result<()> {
+  fn iterators() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
     let store = Store::open(&env, "mystore")?;
-    let mut tx = env.begin_rw_txn()?;
-    store.put(&mut tx, [10], &10)?;
-    store.put(&mut tx, [100], &100)?;
-    tx.commit()?;
+    let items: Vec<(&[u8], u16)> = vec![(b"0", 10), (b"1", 100), (b"2", 1000)];
+    for (key, value) in items.iter() {
+      let mut tx = env.begin_rw_txn()?;
+      store.put(&mut tx, key, value)?;
+      tx.commit()?;
+    }
 
     let tx = env.begin_ro_txn()?;
-    let mut iter = store.iter_from(&tx, [0])?;
-    assert_eq!(Some(Ok((&[10][..], 10))), iter.next());
-    assert_eq!(Some(Ok((&[100][..], 100))), iter.next());
-
+    let iter = store.iter_from(&tx, [0])?;
+    assert_eq!(items, iter.collect::<Result<Vec<_>>>()?);
+    let tx = tx.reset().renew()?;
+    let iter_back = store.iter_end_backwards(&tx)?;
+    let back_items: Vec<_> = items.into_iter().rev().collect();
+    assert_eq!(back_items, iter_back.collect::<Result<Vec<_>>>()?);
     Ok(())
   }
 

@@ -451,7 +451,7 @@ checksum = "89203f3fba0a3795506acaad8ebce3c80c0af93f994d5a1d7a0b1eeb23271929"
 [[package]]
 name = "lmdb-rkv"
 version = "0.14.0"
-source = "git+https://github.com/hecsalazarf/lmdb-rs#e5c95fe31809a05939397beddaad323153cde347"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#ed82b2637fc6425846cf9acd3bfd5fd18af15b95"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "lmdb-rkv-sys"
 version = "0.11.0"
-source = "git+https://github.com/hecsalazarf/lmdb-rs#e5c95fe31809a05939397beddaad323153cde347"
+source = "git+https://github.com/hecsalazarf/lmdb-rs#ed82b2637fc6425846cf9acd3bfd5fd18af15b95"
 dependencies = [
  "cc",
  "libc",
