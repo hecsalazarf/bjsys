@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use serde::{Serialize, Deserialize};
 pub use crate::stub::msg::*;
 
 pub struct TaskHash;
@@ -16,11 +15,38 @@ impl TaskHash {
   pub const FINISHED_ON: &'static str = "finished_on";
 }
 
-impl FetchResponse {
-  pub fn from_map(id: String, mut values: HashMap<String, String>) -> Self {
-    let data = values.remove(TaskHash::DATA).unwrap_or_default();
-    let queue = values.remove(TaskHash::QUEUE).unwrap_or_default();
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TaskData {
+  pub args: String,
+  pub queue: String,
+  pub retry: u32,
+  pub delay: u64,
+  pub deliveries: u32,
+  pub status: i32,
+  pub message: String,
+  pub processed_on: u64,
+  pub finished_on: u64,
+}
 
-    FetchResponse { id, queue, data }
+impl From<CreateRequest> for TaskData {
+  fn from(val: CreateRequest) -> Self {
+    Self {
+      args: val.data,
+      queue: val.queue,
+      retry: val.retry,
+      delay: val.delay,
+      ..Self::default()
+    }
+  }
+}
+
+impl From<AckRequest> for TaskData {
+  fn from(val: AckRequest) -> Self {
+    Self {
+      queue: val.queue,
+      status: val.status,
+      message: val.message,
+      ..Self::default()
+    }
   }
 }

@@ -1,13 +1,12 @@
 use clap::{App as Cli, Arg, ArgMatches, Error, ErrorKind};
-use redis::ConnectionInfo;
 use std::{ffi::OsString, net::SocketAddr};
 use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Debug)]
 pub struct Config {
   socket: SocketAddr,
-  redis_conn: ConnectionInfo,
   log_filter: LevelFilter,
+  sync: bool,
 }
 
 impl Config {
@@ -25,13 +24,14 @@ impl Config {
     self.socket
   }
 
-  pub fn redis_conn(&self) -> &ConnectionInfo {
-    &self.redis_conn
-  }
-
   pub fn log_filter(&self) -> LevelFilter {
     self.log_filter
   }
+
+  pub fn is_sync(&self) -> bool {
+    self.sync
+  }
+
 
   fn merge_cli(&mut self, args: Vec<OsString>) {
     let matches = Self::cli_matches(args);
@@ -45,14 +45,8 @@ impl Config {
       }
     }
 
-    // Redis connection info
-    if let Some(url) = matches.value_of(ArgName::REDIS) {
-      if let Ok(conn_info) = url.parse() {
-        self.redis_conn = conn_info;
-      } else {
-        Self::exit(&format!("Invalid Redis URL '{}'", url));
-      }
-    }
+    // Sync
+    self.sync = matches.is_present(ArgName::SYNC);
 
     // Log filter
     if let Some(filter) = matches.value_of(ArgName::LOG_FILTER) {
@@ -82,17 +76,18 @@ impl Config {
           .takes_value(true),
       )
       .arg(
-        Arg::with_name(ArgName::REDIS)
-          .short("r")
-          .long("redis")
-          .help(&format!("Redis URL (default: {})", DefaultValue::REDIS_URL))
-          .takes_value(true)
-          .value_name("URL"),
+        Arg::with_name(ArgName::SYNC)
+          .short("s")
+          .long("sync")
+          .help("Flush system buffers to disk on every transaction")
+          .long_help(
+            "Flush system buffers to disk on every transaction.
+This guarantees ACID properties but decreases performance.",
+          ),
       )
       .arg(
         Arg::with_name(ArgName::LOG_FILTER)
-          .short("l")
-          .long("loglevel")
+          .long("log-level")
           .help(&format!(
             "Log level (default: {})",
             DefaultValue::LOG_FILTER
@@ -112,13 +107,13 @@ impl Config {
 impl Default for Config {
   fn default() -> Self {
     let socket = SocketAddr::new(DefaultValue::HOST.parse().unwrap(), DefaultValue::PORT);
-    let redis_conn = DefaultValue::REDIS_URL.parse().unwrap();
     let log_filter = DefaultValue::LOG_FILTER;
+    let sync = false;
 
     Self {
       socket,
-      redis_conn,
       log_filter,
+      sync,
     }
   }
 }
@@ -137,8 +132,8 @@ struct ArgName;
 
 impl ArgName {
   const PORT: &'static str = "PORT";
-  const REDIS: &'static str = "REDIS";
   const LOG_FILTER: &'static str = "LOG_FILTER";
+  const SYNC: &'static str = "SYNC";
 }
 
 struct DefaultValue;
@@ -146,9 +141,5 @@ struct DefaultValue;
 impl DefaultValue {
   const PORT: u16 = 7330;
   const HOST: &'static str = "0.0.0.0";
-  #[cfg(unix)]
-  const REDIS_URL: &'static str = "redis+unix:///tmp/redis.sock?db=0";
-  #[cfg(not(unix))]
-  const REDIS_URL: &'static str = "redis://127.0.0.1/0";
   const LOG_FILTER: LevelFilter = LevelFilter::INFO;
 }

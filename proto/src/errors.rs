@@ -1,4 +1,5 @@
 pub use crate::stub::error_details::*;
+use prost::Message;
 use validator::{ValidationErrors, ValidationErrorsKind};
 
 impl From<ValidationErrors> for BadRequest {
@@ -17,5 +18,15 @@ impl From<ValidationErrors> for BadRequest {
     }
 
     BadRequest { field_violations }
+  }
+}
+
+impl BadRequest {
+  /// Encodes `self` into a `prost` message bytes.
+  pub fn into_bytes(self) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(self.encoded_len());
+    // Never fails as the buffer has sufficient capacity
+    self.encode(&mut buffer).unwrap();
+    buffer
   }
 }

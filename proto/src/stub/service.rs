@@ -257,6 +257,7 @@ pub mod tasks_core_server {
             http::Response::builder()
               .status(200)
               .header("grpc-status", "12")
+              .header("content-type", "application/grpc")
               .body(tonic::body::BoxBody::empty())
               .unwrap(),
           )

@@ -1,6 +1,6 @@
 [package]
 name = "proto"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Hector Salazar <hecsalazarf@outlook.com>"]
 edition = "2018"
 
@@ -11,9 +11,10 @@ client = []
 server = []
 
 [dependencies]
-prost = "0.6.1"
-tonic = "0.3.1"
-validator = "0.11.0"
+prost = "0.7.0"
+tonic = { version = "0.4.0", default-features = false, features = ["codegen", "prost"] }
+validator = "0.12.0"
+serde = { version = "1.0.122", default-features = false, features = ["serde_derive"] }
 
 [build-dependencies]
-tonic-build = "0.3.1"
+tonic-build = "0.4.0"

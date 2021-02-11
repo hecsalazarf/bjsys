@@ -1,7 +1,10 @@
 use crate::config::Config;
+use crate::repository::Repository;
 use crate::service::{Runnable, TaskService};
-use crate::store::RedisServer;
-use std::{ffi::OsString, path::PathBuf, process::Child};
+use std::{
+  ffi::OsString,
+  path::{Path, PathBuf},
+};
 use tracing_subscriber::filter::EnvFilter;
 
 pub struct Builder {
@@ -14,7 +17,7 @@ impl Builder {
   pub fn with_args<I, T>(mut self, args: I) -> Self
   where
     I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
+    T: Into<OsString>,
   {
     self.args = args.into_iter().map(|i| i.into()).collect();
     self
@@ -38,23 +41,16 @@ impl Builder {
     self
   }
 
-  pub async fn init(self) -> App {
+  pub async fn init(self) -> anyhow::Result<App> {
     let config = Config::from(self.args);
     if let Some(filter) = self.env_filter {
       Self::init_tracing(filter, &config);
     }
 
-    let _redis = Self::boot_storage(&self.working_dir, &config);
-    let service = TaskService::init(config.redis_conn()).await;
-    if let Err(e) = &service {
-      exit(e);
-    }
-    let service = service.unwrap();
-    App {
-      service,
-      config,
-      _redis,
-    }
+    let repo = Self::init_storage(&self.working_dir, &config)?;
+    let service = TaskService::init(repo).await?;
+
+    Ok(App { service, config })
   }
 
   fn init_tracing(filter: EnvFilter, config: &Config) {
@@ -73,17 +69,15 @@ impl Builder {
       .init();
   }
 
-  fn boot_storage(dir: &std::path::Path, config: &Config) -> Child {
-    let redis_res = RedisServer::new()
-      .with_dir(dir)
-      .with_log("redis.log")
-      .boot(config.redis_conn());
-
-    if let Err(e) = redis_res {
-      exit(format!("Redis failed to boot: {}", e));
-    }
-
-    redis_res.unwrap()
+  fn init_storage(path: &Path, config: &Config) -> anyhow::Result<Repository> {
+    use anyhow::Context;
+    tracing::info!("Initializing storage");
+    let mut builder = Repository::build();
+    builder.sync(config.is_sync());
+    let repo = builder
+      .open(path.join("bjsys"))
+      .context("Failed to init storage")?;
+    Ok(repo)
   }
 }
 
@@ -105,23 +99,20 @@ impl Default for Builder {
 pub struct App {
   service: TaskService,
   config: Config,
-  _redis: Child,
 }
 
 impl App {
-  pub fn builder() -> Builder {
-    Builder::default()
+  pub async fn run() -> anyhow::Result<()> {
+    let app = Builder::default()
+      .with_args(std::env::args_os())
+      .with_tracing(true)
+      .init()
+      .await?;
+    app.listen().await
   }
 
-  pub async fn listen(self) {
-    let config = self.config;
-    if let Err(e) = self.service.listen_on(config.socket()).await {
-      exit(e);
-    }
+  async fn listen(self) -> anyhow::Result<()> {
+    self.service.listen_on(self.config.socket()).await?;
+    Ok(())
   }
-}
-
-fn exit<T: std::fmt::Display>(e: T) -> ! {
-  tracing::error!("{}", e);
-  std::process::exit(1)
 }

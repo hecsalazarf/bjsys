@@ -1,7 +1,8 @@
-use crate::dispatcher::{MasterDispatcher, TaskStream};
+use crate::dispatcher::MasterDispatcher;
 use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
-use crate::store::{ConnectionInfo, MultiplexedStore, RedisStorage};
+use crate::repository::{RepoError, Repository};
+use crate::task::TaskStream;
 use proto::server::{TasksCore, TasksCoreServer};
 use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use std::net::SocketAddr;
@@ -23,8 +24,8 @@ pub struct TaskService {
 }
 
 impl TaskService {
-  pub async fn init(redis_info: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
-    let inner = TasksServiceImpl::init(redis_info).await?;
+  pub async fn init(repo: Repository) -> anyhow::Result<Self> {
+    let inner = TasksServiceImpl::init(repo).await?;
     let router = Server::builder().add_service(TasksCoreServer::new(inner));
 
     let service = Self { router };
@@ -43,20 +44,18 @@ impl Runnable for TaskService {
 }
 
 struct TasksServiceImpl {
-  // This store must be used ONLY for non-blocking operations
-  store: MultiplexedStore,
   manager: Manager,
   dispatcher: MasterDispatcher,
+  repo: Repository,
 }
 
 impl TasksServiceImpl {
-  pub async fn init(redis_conn: &ConnectionInfo) -> Result<Self, Box<dyn std::error::Error>> {
-    let store = MultiplexedStore::connect(redis_conn).await?;
-    let manager = Manager::init(&store).await?;
-    let dispatcher = MasterDispatcher::init(&store, &manager, redis_conn).await;
+  pub async fn init(repo: Repository) -> anyhow::Result<Self> {
+    let manager = Manager::init(&repo).await?;
+    let dispatcher = MasterDispatcher::init(&repo, &manager).await;
 
     let service = Self {
-      store,
+      repo,
       manager,
       dispatcher,
     };
@@ -80,19 +79,14 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
-    let payload = request.into_inner();
-    let mut store = self.store.clone();
-
-    let res = if payload.delay > 0 {
-      store.create_delayed_task(&payload, payload.delay).await
-    } else {
-      store.create_task(&payload).await
-    };
+    let task_data = request.into_inner().into();
+    let res = self.repo.create(&task_data).await;
 
     res
-      .map(|r| {
-        tracing::debug!("Task created with id {}", r);
-        Response::new(CreateResponse { task_id: r })
+      .map(|id| {
+        let id = id.to_simple().to_string();
+        tracing::debug!("Task created with id {}", id);
+        Response::new(CreateResponse { task_id: id })
       })
       .map_err(|e| {
         tracing::error!("Cannot create task: {}", e);
@@ -101,19 +95,35 @@ impl TasksCore for TasksServiceImpl {
   }
 
   async fn ack(&self, request: Request<AckRequest>) -> ServiceResult<Empty> {
+    use std::convert::TryInto;
     request.intercept()?;
+    let task = request
+      .into_inner()
+      .try_into()
+      .map_err(|e| Status::invalid_argument(e))?;
+
     self
       .manager
-      .ack(request.into_inner())
+      .ack(task)
       .await
       .map(|_| Response::new(Empty::default()))
+      .map_err(|e| {
+        if e == RepoError::NotFound {
+          Status::invalid_argument("Task is not pending")
+        } else {
+          Status::unavailable("Service not available")
+        }
+      })
   }
 
   type FetchStream = TaskStream;
   async fn fetch(&self, request: Request<FetchRequest>) -> ServiceResult<Self::FetchStream> {
     request.intercept()?;
     let payload = request.into_inner();
-    let stream = self.dispatcher.produce(payload.queue).await?;
+    let stream = self.dispatcher.produce(payload.queue).await.map_err(|e| {
+      tracing::error!("Cannot start stream {}", e);
+      Status::unavailable("Internal error")
+    })?;
 
     Ok(Response::new(stream))
   }

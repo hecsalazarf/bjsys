@@ -1,5 +1,5 @@
-use crate::dispatcher::{ActiveTasks, Dispatcher};
-use crate::store::{MultiplexedStore, RedisStorage, StoreError};
+use crate::dispatcher::Dispatcher;
+use crate::repository::Repository;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};
@@ -10,12 +10,12 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-  pub fn new(queue: Arc<String>, store: MultiplexedStore) -> Self {
-    let instance = QueueScheduler::new(store, queue);
+  pub fn new(queue: Arc<String>, repo: Repository) -> Self {
+    let instance = QueueScheduler::new(repo, queue);
     Self { inner: instance }
   }
 
-  pub async fn start(&mut self, dispatcher: Addr<Dispatcher>) -> Result<(), ActorError> {
+  pub async fn start(&mut self, dispatcher: Dispatcher) -> Result<(), ActorError> {
     if let QueueScheduler::Inst(ref mut inst) = self.inner {
       let mut scheduler = inst.take().unwrap();
       scheduler.dispatcher.replace(dispatcher);
@@ -39,28 +39,28 @@ enum QueueScheduler {
 }
 
 impl QueueScheduler {
-  fn new(store: MultiplexedStore, queue: Arc<String>) -> Self {
-    QueueScheduler::Inst(Some(SchedulerWorker::new(store, queue)))
+  fn new(repo: Repository, queue: Arc<String>) -> Self {
+    QueueScheduler::Inst(Some(SchedulerWorker::new(repo, queue)))
   }
 }
 
 struct SchedulerWorker {
-  store: MultiplexedStore,
-  dispatcher: Option<Addr<Dispatcher>>,
+  repo: Repository,
+  dispatcher: Option<Dispatcher>,
   queue: Arc<String>,
 }
 
 impl SchedulerWorker {
-  pub fn new(store: MultiplexedStore, queue: Arc<String>) -> Self {
+  pub fn new(repo: Repository, queue: Arc<String>) -> Self {
     Self {
-      store,
+      repo,
       queue,
       dispatcher: None,
     }
   }
 
   async fn poll_delayed(&mut self) {
-    if let Err(e) = self.store.schedule_delayed(self.queue.as_ref(), 5).await {
+    if let Err(e) = self.repo.schedule_delayed(self.queue.as_ref()).await {
       error!(
         "Failed to schedule delayed tasks of '{}': {}",
         self.queue, e
@@ -69,14 +69,10 @@ impl SchedulerWorker {
   }
 
   async fn poll_stalled(&mut self) {
-    let log_error = |queue: &str, e: StoreError| {
-      error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
-    };
-
     let queue = self.queue.as_ref();
-    let pending = match self.store.read_pending(queue).await {
+    let pending = match self.repo.find_in_process(queue).await {
       Err(e) => {
-        log_error(queue, e);
+        error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
         Vec::new()
       }
       Ok(pending) => pending,
@@ -90,7 +86,7 @@ impl SchedulerWorker {
     let dispatcher = self.dispatcher.as_ref().unwrap();
     // Active-tasks call only fails when the dispatcher dropped. In such
     // case, we simply exit
-    if let Ok(mut active) = dispatcher.call(ActiveTasks).await {
+    if let Ok(mut active) = dispatcher.active_tasks().await {
       // Reverse iterator from right to left to respect the order in which they
       // were inserted. Then, filter pending tasks that are not active (stalled).
       let stalled = pending.into_iter().rev().filter(|p| {
@@ -108,8 +104,8 @@ impl SchedulerWorker {
         found.is_none()
       });
 
-      if let Err(e) = self.store.renqueue(queue, stalled).await {
-        log_error(queue, e);
+      if let Err(e) = self.repo.renqueue(queue, stalled).await {
+        error!("Failed to renqueue stalled tasks of '{}': {}", queue, e);
       }
     }
   }
@@ -122,12 +118,12 @@ impl Actor for SchedulerWorker {
     // TODO: The poll_stalled() has to be called at start, then at intervals
     // of the configured value
     ctx.send_interval(PollTasks::Stalled, Duration::from_secs(5));
-    debug!("QueueScheduler '{}' started", self.queue);
+    debug!("Scheduler for '{}' started", self.queue);
     Ok(())
   }
 
   async fn stopped(&mut self, _ctx: &mut Context<Self>) {
-    debug!("QueueScheduler '{}' stopped", self.queue);
+    debug!("Scheduler for '{}' stopped", self.queue);
   }
 }
 
