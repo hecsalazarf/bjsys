@@ -64,6 +64,24 @@ impl<D> Store<D> {
     txn.del(self.database, &key.as_ref(), None)
   }
 
+  /// Returns the first key and value in the Store, or None if the Store is empty.
+  pub fn first<'txn, T>(&self, txn: &'txn T) -> Result<Option<(&'txn [u8], D)>>
+  where
+    D: Deserialize<'txn>,
+    T: Transaction,
+  {
+    self.iter_from(txn, [0])?.take(1).next().transpose()
+  }
+
+  /// Returns the last key and value in the Store, or None if the Store is empty.
+  pub fn last<'txn, T>(&self, txn: &'txn T) -> Result<Option<(&'txn [u8], D)>>
+  where
+    D: Deserialize<'txn>,
+    T: Transaction,
+  {
+    self.iter_end_backwards(txn)?.take(1).next().transpose()
+  }
+
   /// Returns an iterator positioned at first key greater than or equal to the specified key.
   pub fn iter_from<'txn, K, T>(&self, txn: &'txn T, key: K) -> Result<StoreIter<'txn, D>>
   where
@@ -171,6 +189,30 @@ mod tests {
     let tx = env.begin_ro_txn()?;
     // Err because we store a bool and we try to get a f64
     assert_eq!(Err(Error::Incompatible), store.get(&tx, "true"));
+    Ok(())
+  }
+
+  #[test]
+  fn first_last() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let store = Store::open(&env, "mystore")?;
+    let tx = env.begin_ro_txn()?;
+    assert_eq!(Ok(None), store.last(&tx));
+    let tx = tx.reset().renew()?;
+    assert_eq!(Ok(None), store.first(&tx));
+    tx.abort();
+
+    let items: Vec<(&[u8], u16)> = vec![(b"Z", 10), (b"Y", 100), (b"X", 1000)];
+    for (key, value) in items.iter() {
+      let mut tx = env.begin_rw_txn()?;
+      store.put(&mut tx, key, value)?;
+      tx.commit()?;
+    }
+
+    let tx = env.begin_ro_txn()?;
+    assert_eq!(Ok(Some((&b"Z"[..], 10))), store.last(&tx));
+    let tx = tx.reset().renew()?;
+    assert_eq!(Ok(Some((&b"X"[..], 1000))), store.first(&tx));
     Ok(())
   }
 }
