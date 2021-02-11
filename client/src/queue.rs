@@ -78,7 +78,7 @@ mod tests {
     assert_eq!(builder.name, String::from(name));
     assert_eq!(
       builder.endpoint.uri(),
-      &Uri::from_static("http://localhost:11000")
+      &Uri::from_static("http://127.0.0.1:7330")
     );
   }
 }
