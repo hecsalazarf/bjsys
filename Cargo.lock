@@ -775,6 +775,7 @@ dependencies = [
  "serde",
  "tonic",
  "tonic-build",
+ "uuid",
  "validator",
 ]
 
