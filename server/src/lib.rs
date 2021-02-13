@@ -6,5 +6,6 @@ mod repository;
 mod scheduler;
 mod service;
 mod task;
+mod cluster;
 
 pub mod app;

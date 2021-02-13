@@ -17,6 +17,13 @@ pub mod server {
 }
 
 #[cfg(feature = "server")]
-pub mod raft {
-  pub use super::stub::raft::*;
+pub mod cluster {
+  pub mod msg {
+    pub use crate::stub::raft::*;
+  }
+
+  pub use async_raft::*;
+
+  impl async_raft::AppData for msg::ClientRequest {}
+  impl async_raft::AppDataResponse for msg::ClientResponse {}
 }
