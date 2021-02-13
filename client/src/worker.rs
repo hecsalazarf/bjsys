@@ -2,9 +2,10 @@ use crate::error::{Error, ProcessCode, ProcessError};
 use crate::task::{Context, Task};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use proto::client::TasksCoreClient as Client;
-use proto::{AckRequest, FetchRequest, TaskStatus};
+use proto::{AckRequest, FetchRequest, TaskStatus, RequestExt};
 use std::sync::Arc;
 use tonic::transport::{channel::Channel, Endpoint, Uri};
+use tonic::Request;
 use xactor::{message, Actor, Addr, Context as ActorContext, Handler};
 
 #[derive(Debug)]
@@ -135,13 +136,15 @@ impl<P: Processor> ProcessorWorker<P> {
         }
       };
 
-      let req = AckRequest {
+      let mut request = Request::new(AckRequest {
         queue,
         task_id: id,
         status: status.into(),
         message,
-      };
-      self.client.ack(req).await?;
+      });
+
+      request.make_idempotent();
+      self.client.ack(request).await?;
     }
 
     Ok(())

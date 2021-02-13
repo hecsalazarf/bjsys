@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::task::Builder;
 use proto::client::TasksCoreClient as Client;
+use proto::RequestExt;
 use serde::Serialize;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};
@@ -56,11 +57,12 @@ impl Queue {
   where
     T: Serialize,
   {
-    let request = task.into_request(&self.name)?;
+    let mut request = Request::new(task.into_request(&self.name)?);
+    let _req_id = request.make_idempotent();
 
     let response = self
       .client
-      .create(Request::new(request))
+      .create(request)
       .await?
       .into_inner();
 
