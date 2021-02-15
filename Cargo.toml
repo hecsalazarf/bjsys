@@ -6,4 +6,5 @@ members = [
   "client",
   "utils",
   "embed",
+  "build",
 ]
