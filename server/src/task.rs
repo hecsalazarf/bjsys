@@ -1,11 +1,11 @@
 use crate::dispatcher::Dispatcher;
 use crate::repository::RepoError;
-use proto::{AckRequest, FetchResponse};
+use common::{AckRequest, FetchResponse};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
-pub use proto::{TaskData, TaskStatus};
+pub use common::{TaskData, TaskStatus};
 pub type TaskId = Uuid;
 
 #[derive(Default, Debug)]

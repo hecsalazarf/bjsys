@@ -2,7 +2,7 @@
 
 members = [
   "server",
-  "proto",
+  "common",
   "client",
   "utils",
   "embed",

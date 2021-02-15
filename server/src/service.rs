@@ -3,8 +3,8 @@ use crate::interceptor::RequestInterceptor;
 use crate::manager::Manager;
 use crate::repository::{RepoError, Repository};
 use crate::task::TaskStream;
-use proto::server::{TasksCore, TasksCoreServer};
-use proto::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
+use common::server::{TasksCore, TasksCoreServer};
+use common::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
 use std::net::SocketAddr;
 use tonic::transport::{
   server::{Router, Unimplemented},

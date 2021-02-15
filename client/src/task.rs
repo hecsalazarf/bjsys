@@ -1,4 +1,4 @@
-use proto::{CreateRequest, FetchResponse};
+use common::{CreateRequest, FetchResponse};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::time::Duration;

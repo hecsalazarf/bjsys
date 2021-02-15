@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::task::Builder;
-use proto::client::TasksCoreClient as Client;
-use proto::RequestExt;
+use common::client::TasksCoreClient as Client;
+use common::RequestExt;
 use serde::Serialize;
 use tonic::transport::channel::Channel;
 use tonic::transport::{Endpoint, Uri};

@@ -169,8 +169,8 @@ dependencies = [
 name = "client"
 version = "0.2.0"
 dependencies = [
+ "common",
  "futures-util",
- "proto",
  "serde",
  "serde_json",
  "tokio",
@@ -178,6 +178,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xactor",
+]
+
+[[package]]
+name = "common"
+version = "0.2.0"
+dependencies = [
+ "async-raft",
+ "prost",
+ "serde",
+ "tonic",
+ "tonic-build",
+ "uuid",
+ "validator",
 ]
 
 [[package]]
@@ -774,19 +787,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proto"
-version = "0.2.0"
-dependencies = [
- "async-raft",
- "prost",
- "serde",
- "tonic",
- "tonic-build",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -965,9 +965,9 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
+ "common",
  "embed",
  "futures-util",
- "proto",
  "rand 0.8.2",
  "tempfile",
  "tokio",
