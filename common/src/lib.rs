@@ -1,11 +1,10 @@
 pub mod errors;
-mod messages;
 mod request;
 mod stub;
 mod validators;
 
-pub use messages::*;
 pub use request::RequestExt;
+pub use stub::msg::*;
 pub use validators::MessageValidator;
 
 #[cfg(feature = "client")]

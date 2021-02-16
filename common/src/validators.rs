@@ -1,4 +1,4 @@
-use crate::{AckRequest, CreateRequest, FetchRequest, TaskHash};
+use crate::{AckRequest, CreateRequest, FetchRequest};
 use validator::{HasLen, ValidationError, ValidationErrors};
 
 #[derive(Clone)]
@@ -70,15 +70,15 @@ impl MessageValidator for CreateRequest {
     let mut errors = ValidationErrors::new();
     // Queue length
     if let Err(e) = validate_length(Defaults::STRING_LEN, &self.queue) {
-      errors.add(TaskHash::QUEUE, e);
+      errors.add(FieldName::QUEUE, e);
     }
     // Data size
     if let Err(e) = validate_length(Defaults::DATA_SIZE, &self.data) {
-      errors.add(TaskHash::DATA, e);
+      errors.add(FieldName::DATA, e);
     }
     // Retries range
     if let Err(e) = validate_range(Defaults::RETRY, self.retry as f64) {
-      errors.add(TaskHash::RETRY, e);
+      errors.add(FieldName::RETRY, e);
     }
     errors
   }
@@ -89,11 +89,11 @@ impl MessageValidator for AckRequest {
     let mut errors = ValidationErrors::new();
     // Task ID length
     if let Err(e) = validate_length(Defaults::STRING_LEN, &self.task_id) {
-      errors.add(TaskHash::ID, e);
+      errors.add(FieldName::ID, e);
     }
     // Queue length
     if let Err(e) = validate_length(Defaults::STRING_LEN, &self.queue) {
-      errors.add(TaskHash::QUEUE, e);
+      errors.add(FieldName::QUEUE, e);
     }
 
     // Message is optional, so there is no minimum length
@@ -103,7 +103,7 @@ impl MessageValidator for AckRequest {
       equal: None,
     };
     if let Err(e) = validate_length(validator, &self.message) {
-      errors.add(TaskHash::MESSAGE, e);
+      errors.add(FieldName::MESSAGE, e);
     }
     // Status is always valid. Value is converted to 0 if it exceeds the range
 
@@ -120,7 +120,7 @@ impl MessageValidator for FetchRequest {
     }
     // Queue length
     if let Err(e) = validate_length(Defaults::STRING_LEN, &self.queue) {
-      errors.add(TaskHash::QUEUE, e);
+      errors.add(FieldName::QUEUE, e);
     }
     // Label vec length
     if let Err(e) = validate_length(Defaults::LABEL, &self.label) {
@@ -183,4 +183,14 @@ fn validate_range(validator: Validator, value: f64) -> Result<(), ValidationErro
     }
     _ => unreachable!(),
   }
+}
+
+pub struct FieldName;
+
+impl FieldName {
+  pub const ID: &'static str = "id";
+  pub const DATA: &'static str = "data";
+  pub const QUEUE: &'static str = "queue";
+  pub const RETRY: &'static str = "retry";
+  pub const MESSAGE: &'static str = "message";
 }

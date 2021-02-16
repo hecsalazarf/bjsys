@@ -16,6 +16,7 @@ rand = "0.8.2"
 uuid = { version = "0.8.2", features = ["v4"] }
 clap = { version = "2.33.3", default-features = false }
 anyhow = "1.0.38"
+serde = { version = "1.0.123", default-features = false, features = ["serde_derive"] }
 common = { path = "../common", features = ["server"] }
 embed = { path = "../embed" }
 

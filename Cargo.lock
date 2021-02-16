@@ -969,6 +969,7 @@ dependencies = [
  "embed",
  "futures-util",
  "rand 0.8.2",
+ "serde",
  "tempfile",
  "tokio",
  "tonic",

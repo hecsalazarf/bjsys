@@ -1,11 +1,12 @@
 use crate::dispatcher::Dispatcher;
 use crate::repository::RepoError;
-use common::{AckRequest, FetchResponse};
+use common::{AckRequest, CreateRequest, FetchResponse};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
-pub use common::{TaskData, TaskStatus};
+pub use common::TaskStatus;
 pub type TaskId = Uuid;
 
 #[derive(Default, Debug)]
@@ -101,6 +102,42 @@ impl Eq for InProcessTask {}
 impl std::borrow::Borrow<Uuid> for InProcessTask {
   fn borrow(&self) -> &Uuid {
     self.id.as_ref()
+  }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TaskData {
+  pub args: String,
+  pub queue: String,
+  pub retry: u32,
+  pub delay: u64,
+  pub deliveries: u32,
+  pub status: i32,
+  pub message: String,
+  pub processed_on: u64,
+  pub finished_on: u64,
+}
+
+impl From<CreateRequest> for TaskData {
+  fn from(val: CreateRequest) -> Self {
+    Self {
+      args: val.data,
+      queue: val.queue,
+      retry: val.retry,
+      delay: val.delay,
+      ..Self::default()
+    }
+  }
+}
+
+impl From<AckRequest> for TaskData {
+  fn from(val: AckRequest) -> Self {
+    Self {
+      queue: val.queue,
+      status: val.status,
+      message: val.message,
+      ..Self::default()
+    }
   }
 }
 
