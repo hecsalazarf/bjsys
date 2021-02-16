@@ -4,10 +4,9 @@ use common::service::{AckRequest, CreateRequest, FetchResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
-use uuid::Uuid;
 
 pub use common::service::TaskStatus;
-pub type TaskId = Uuid;
+pub type TaskId = uuid::Uuid;
 
 #[derive(Default, Debug)]
 pub struct Task {
@@ -41,7 +40,7 @@ impl std::convert::TryFrom<AckRequest> for Task {
   type Error = &'static str;
   fn try_from(val: AckRequest) -> Result<Self, Self::Error> {
     let task = Self {
-      id: Uuid::parse_str(&val.task_id).map_err(|_| "uuid failed")?,
+      id: TaskId::parse_str(&val.task_id).map_err(|_| "uuid failed")?,
       data: val.into(),
     };
     Ok(task)
@@ -60,19 +59,19 @@ impl From<Task> for FetchResponse {
 
 #[derive(Clone)]
 pub struct InProcessTask {
-  id: Arc<Uuid>,
+  id: Arc<TaskId>,
   notify: Arc<Notify>,
 }
 
 impl InProcessTask {
-  pub fn new(id: Uuid) -> Self {
+  pub fn new(id: TaskId) -> Self {
     Self {
       id: Arc::new(id),
       notify: Arc::new(Notify::new()),
     }
   }
 
-  pub fn id(&self) -> Weak<Uuid> {
+  pub fn id(&self) -> Weak<TaskId> {
     Arc::downgrade(&self.id)
   }
 
@@ -99,8 +98,8 @@ impl PartialEq for InProcessTask {
 
 impl Eq for InProcessTask {}
 
-impl std::borrow::Borrow<Uuid> for InProcessTask {
-  fn borrow(&self) -> &Uuid {
+impl std::borrow::Borrow<TaskId> for InProcessTask {
+  fn borrow(&self) -> &TaskId {
     self.id.as_ref()
   }
 }
