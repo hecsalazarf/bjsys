@@ -34,7 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::fmt().init();
 
   let now = std::time::Instant::now();
-  let worker = MyProcessor.configure()
+  let worker = MyProcessor
+    .configure()
     .for_queue("myqueue")
     .concurrency(WORKERS)
     .connect()

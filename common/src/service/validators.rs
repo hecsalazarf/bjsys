@@ -1,4 +1,4 @@
-use crate::{AckRequest, CreateRequest, FetchRequest};
+use super::{AckRequest, CreateRequest, FetchRequest};
 use validator::{HasLen, ValidationError, ValidationErrors};
 
 #[derive(Clone)]

@@ -32,7 +32,6 @@ impl Config {
     self.sync
   }
 
-
   fn merge_cli(&mut self, args: Vec<OsString>) {
     let matches = Self::cli_matches(args);
 

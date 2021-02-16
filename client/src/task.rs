@@ -1,4 +1,4 @@
-use common::{CreateRequest, FetchResponse};
+use common::service::{CreateRequest, FetchResponse};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::time::Duration;

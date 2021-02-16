@@ -5,11 +5,11 @@ import "messages.proto";
 
 service TasksCore {
   // Create a new task (producer)
-  rpc Create(msg.CreateRequest) returns (msg.CreateResponse) {}
+  rpc Create(msgs.CreateRequest) returns (msgs.CreateResponse) {}
 
   // Acknowledge that a task was processed (consumer)
-  rpc Ack(msg.AckRequest) returns (msg.Empty) {}
+  rpc Ack(msgs.AckRequest) returns (msgs.Empty) {}
 
   // Fetch to process tasks (consumer)
-  rpc Fetch(msg.FetchRequest) returns (stream msg.FetchResponse) {}
+  rpc Fetch(msgs.FetchRequest) returns (stream msgs.FetchResponse) {}
 }

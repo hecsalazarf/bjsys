@@ -1,6 +1,7 @@
-pub use crate::stub::error_details::*;
 use prost::Message;
 use validator::{ValidationErrors, ValidationErrorsKind};
+
+pub use super::error_details::*;
 
 impl From<ValidationErrors> for BadRequest {
   fn from(value: ValidationErrors) -> Self {

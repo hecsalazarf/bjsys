@@ -13,11 +13,11 @@ pub mod client_request {
   #[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Oneof)]
   pub enum Request {
     #[prost(message, tag = "3")]
-    Create(super::super::msg::CreateRequest),
+    Create(::common::service::CreateRequest),
     #[prost(message, tag = "4")]
-    Ack(super::super::msg::AckRequest),
+    Ack(::common::service::AckRequest),
     #[prost(message, tag = "5")]
-    Fetch(super::super::msg::FetchRequest),
+    Fetch(::common::service::FetchRequest),
   }
 }
 /// Client Response
@@ -33,11 +33,11 @@ pub mod client_response {
   #[derive(::serde::Serialize, ::serde::Deserialize, Clone, PartialEq, ::prost::Oneof)]
   pub enum Response {
     #[prost(message, tag = "3")]
-    Create(super::super::msg::CreateResponse),
+    Create(::common::service::CreateResponse),
     #[prost(message, tag = "4")]
-    Ack(super::super::msg::Empty),
+    Ack(::common::service::Empty),
     #[prost(message, tag = "5")]
-    Fetch(super::super::msg::FetchResponse),
+    Fetch(::common::service::FetchResponse),
   }
 }
 /// An RPC sent by a cluster leader to replicate log entries (§5.3), and as a heartbeat (§5.2).
@@ -117,98 +117,6 @@ pub struct VoteResponse {
   pub term: u64,
   #[prost(bool, tag = "2")]
   pub vote_granted: bool,
-}
-#[doc = r" Generated client implementations."]
-pub mod raft_network_client {
-  #![allow(unused_variables, dead_code, missing_docs)]
-  use tonic::codegen::*;
-  pub struct RaftNetworkClient<T> {
-    inner: tonic::client::Grpc<T>,
-  }
-  impl RaftNetworkClient<tonic::transport::Channel> {
-    #[doc = r" Attempt to create a new client by connecting to a given endpoint."]
-    pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-    where
-      D: std::convert::TryInto<tonic::transport::Endpoint>,
-      D::Error: Into<StdError>,
-    {
-      let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
-      Ok(Self::new(conn))
-    }
-  }
-  impl<T> RaftNetworkClient<T>
-  where
-    T: tonic::client::GrpcService<tonic::body::BoxBody>,
-    T::ResponseBody: Body + HttpBody + Send + 'static,
-    T::Error: Into<StdError>,
-    <T::ResponseBody as HttpBody>::Error: Into<StdError> + Send,
-  {
-    pub fn new(inner: T) -> Self {
-      let inner = tonic::client::Grpc::new(inner);
-      Self { inner }
-    }
-    pub fn with_interceptor(inner: T, interceptor: impl Into<tonic::Interceptor>) -> Self {
-      let inner = tonic::client::Grpc::with_interceptor(inner, interceptor);
-      Self { inner }
-    }
-    #[doc = " Send an AppendEntries RPC to the target Raft node (§5)."]
-    pub async fn append_entries(
-      &mut self,
-      request: impl tonic::IntoRequest<super::AppendEntriesRequest>,
-    ) -> Result<tonic::Response<super::AppendEntriesResponse>, tonic::Status> {
-      self.inner.ready().await.map_err(|e| {
-        tonic::Status::new(
-          tonic::Code::Unknown,
-          format!("Service was not ready: {}", e.into()),
-        )
-      })?;
-      let codec = tonic::codec::ProstCodec::default();
-      let path = http::uri::PathAndQuery::from_static("/raft.RaftNetwork/AppendEntries");
-      self.inner.unary(request.into_request(), path, codec).await
-    }
-    #[doc = " Send an InstallSnapshot RPC to the target Raft node (§7)."]
-    pub async fn install_snapshot(
-      &mut self,
-      request: impl tonic::IntoRequest<super::InstallSnapshotRequest>,
-    ) -> Result<tonic::Response<super::InstallSnapshotResponse>, tonic::Status> {
-      self.inner.ready().await.map_err(|e| {
-        tonic::Status::new(
-          tonic::Code::Unknown,
-          format!("Service was not ready: {}", e.into()),
-        )
-      })?;
-      let codec = tonic::codec::ProstCodec::default();
-      let path = http::uri::PathAndQuery::from_static("/raft.RaftNetwork/InstallSnapshot");
-      self.inner.unary(request.into_request(), path, codec).await
-    }
-    #[doc = " Send a RequestVote RPC to the target Raft node (§5)."]
-    pub async fn vote(
-      &mut self,
-      request: impl tonic::IntoRequest<super::VoteRequest>,
-    ) -> Result<tonic::Response<super::VoteResponse>, tonic::Status> {
-      self.inner.ready().await.map_err(|e| {
-        tonic::Status::new(
-          tonic::Code::Unknown,
-          format!("Service was not ready: {}", e.into()),
-        )
-      })?;
-      let codec = tonic::codec::ProstCodec::default();
-      let path = http::uri::PathAndQuery::from_static("/raft.RaftNetwork/Vote");
-      self.inner.unary(request.into_request(), path, codec).await
-    }
-  }
-  impl<T: Clone> Clone for RaftNetworkClient<T> {
-    fn clone(&self) -> Self {
-      Self {
-        inner: self.inner.clone(),
-      }
-    }
-  }
-  impl<T> std::fmt::Debug for RaftNetworkClient<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      write!(f, "RaftNetworkClient {{ ... }}")
-    }
-  }
 }
 #[doc = r" Generated server implementations."]
 pub mod raft_network_server {

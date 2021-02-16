@@ -1,6 +1,6 @@
 use crate::error::Error;
+use crate::stub::TasksCoreClient as Client;
 use crate::task::Builder;
-use common::client::TasksCoreClient as Client;
 use common::RequestExt;
 use serde::Serialize;
 use tonic::transport::channel::Channel;
@@ -60,11 +60,7 @@ impl Queue {
     let mut request = Request::new(task.into_request(&self.name)?);
     let _req_id = request.make_idempotent();
 
-    let response = self
-      .client
-      .create(request)
-      .await?
-      .into_inner();
+    let response = self.client.create(request).await?.into_inner();
 
     Ok(response.task_id)
   }

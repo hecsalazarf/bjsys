@@ -1,12 +1,12 @@
 use crate::dispatcher::Dispatcher;
 use crate::repository::RepoError;
-use common::{AckRequest, CreateRequest, FetchResponse};
+use common::service::{AckRequest, CreateRequest, FetchResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Weak};
 use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
-pub use common::TaskStatus;
+pub use common::service::TaskStatus;
 pub type TaskId = Uuid;
 
 #[derive(Default, Debug)]

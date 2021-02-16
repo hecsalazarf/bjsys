@@ -1,7 +1,7 @@
+use crate::stub::raft2::{ClientRequest, ClientResponse};
+use async_raft::raft::{Entry, MembershipConfig};
+use async_raft::storage::{CurrentSnapshotData, HardState, InitialState, RaftStorage};
 use embed::{Database, Env, Store, Transaction};
-use common::cluster::msg::{ClientRequest, ClientResponse};
-use common::cluster::raft::{Entry, MembershipConfig};
-use common::cluster::storage::{CurrentSnapshotData, HardState, InitialState, RaftStorage};
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
 
@@ -113,7 +113,7 @@ impl Storage {
   where
     T: Transaction,
   {
-    use common::cluster::raft::EntryPayload;
+    use async_raft::raft::EntryPayload;
 
     let cfg_opt = self.log.iter_end_backwards(txn)?.find_map(|res| {
       if let Ok((_, val)) = res {
@@ -294,9 +294,9 @@ mod tests {
   }
 
   fn normal_entry(index: u64, term: u64) -> LogEntry {
-    use common::cluster::msg::client_request::Request;
-    use common::cluster::raft::{EntryNormal, EntryPayload};
-    use common::CreateRequest;
+    use crate::stub::raft2::client_request::Request;
+    use async_raft::raft::{EntryNormal, EntryPayload};
+    use common::service::CreateRequest;
 
     let request = ClientRequest {
       client: "Client".into(),
@@ -312,7 +312,7 @@ mod tests {
   }
 
   fn config_entry(membership: MembershipConfig, index: u64, term: u64) -> LogEntry {
-    use common::cluster::raft::{EntryConfigChange, EntryPayload};
+    use async_raft::raft::{EntryConfigChange, EntryPayload};
     LogEntry {
       term,
       index,

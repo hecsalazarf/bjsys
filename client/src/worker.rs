@@ -1,8 +1,9 @@
 use crate::error::{Error, ProcessCode, ProcessError};
+use crate::stub::TasksCoreClient as Client;
 use crate::task::{Context, Task};
+use common::service::{AckRequest, FetchRequest, TaskStatus};
+use common::RequestExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use common::client::TasksCoreClient as Client;
-use common::{AckRequest, FetchRequest, TaskStatus, RequestExt};
 use std::sync::Arc;
 use tonic::transport::{channel::Channel, Endpoint, Uri};
 use tonic::Request;

@@ -169,6 +169,7 @@ dependencies = [
 name = "client"
 version = "0.2.0"
 dependencies = [
+ "build",
  "common",
  "futures-util",
  "serde",
@@ -184,11 +185,10 @@ dependencies = [
 name = "common"
 version = "0.2.0"
 dependencies = [
- "async-raft",
+ "build",
  "prost",
  "serde",
  "tonic",
- "tonic-build",
  "uuid",
  "validator",
 ]
@@ -964,10 +964,13 @@ name = "server"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-raft",
+ "build",
  "clap",
  "common",
  "embed",
  "futures-util",
+ "prost",
  "rand 0.8.2",
  "serde",
  "tempfile",

@@ -8,9 +8,9 @@ message ClientRequest {
   string client = 1;
   uint64 serial = 2;
   oneof request {
-    msg.CreateRequest create = 3;
-    msg.AckRequest ack = 4;
-    msg.FetchRequest fetch = 5;
+    msgs.CreateRequest create = 3;
+    msgs.AckRequest ack = 4;
+    msgs.FetchRequest fetch = 5;
   }
 }
 
@@ -18,9 +18,9 @@ message ClientRequest {
 message ClientResponse {
   uint64 serial = 1;
   oneof response {
-    msg.CreateResponse create = 3;
-    msg.Empty ack = 4;
-    msg.FetchResponse fetch = 5;
+    msgs.CreateResponse create = 3;
+    msgs.Empty ack = 4;
+    msgs.FetchResponse fetch = 5;
   }
 }
 

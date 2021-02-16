@@ -1,4 +1,4 @@
-use common::{errors::BadRequest, MessageValidator};
+use common::service::{errors::BadRequest, MessageValidator};
 use tonic::{Code, Request, Status};
 
 pub trait RequestInterceptor {

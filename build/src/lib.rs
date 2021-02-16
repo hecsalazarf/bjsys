@@ -2,7 +2,7 @@ use std::io::Result;
 use std::path::{Path, PathBuf};
 pub use tonic_build::*;
 
-const INCLUDES_DIR: &str = "proto1/";
+const INCLUDES_DIR: &str = "proto/";
 
 pub trait BuilderExt {
   fn compile_if_changed<P>(self, protos: &[P], includes: &[P]) -> Result<()>

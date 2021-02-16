@@ -37,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Wait for incoming tasks
   let processor = MyProcessor;
-  let worker = processor.configure()
+  let worker = processor
+    .configure()
     .for_queue("myqueue")
     .connect()
     .await

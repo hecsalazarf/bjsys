@@ -1,3 +1,5 @@
+mod stub;
+
 pub mod error;
 pub mod queue;
 pub mod task;
