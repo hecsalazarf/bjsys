@@ -51,7 +51,7 @@ pub trait TransactionRwExt: TransactionExt {
 
   
   /// Stores an item  of type `T` into database
-  fn put_data<K, D>(&mut self, db: Database, key: K, data: &D, wf: WriteFlags) -> Result<()>
+  fn put_data<K, D: ?Sized>(&mut self, db: Database, key: K, data: &D, wf: WriteFlags) -> Result<()>
   where
     K: AsRef<[u8]>,
     D: Serialize;
