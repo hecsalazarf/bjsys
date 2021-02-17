@@ -5,6 +5,7 @@ use crate::repository::{RepoError, Repository};
 use crate::stub::{TasksCore, TasksCoreServer};
 use crate::task::TaskStream;
 use common::service::{AckRequest, CreateRequest, CreateResponse, Empty, FetchRequest};
+use common::RequestExt;
 use std::net::SocketAddr;
 use tonic::transport::{
   server::{Router, Unimplemented},
@@ -79,8 +80,9 @@ type ServiceResult<T> = Result<Response<T>, Status>;
 impl TasksCore for TasksServiceImpl {
   async fn create(&self, request: Request<CreateRequest>) -> ServiceResult<CreateResponse> {
     request.intercept()?;
+    let token_opt = request.id();
     let task_data = request.into_inner().into();
-    let res = self.repo.create(&task_data).await;
+    let res = self.repo.create(&task_data, token_opt).await;
 
     res
       .map(|id| {

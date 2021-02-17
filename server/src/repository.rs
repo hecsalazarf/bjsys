@@ -1,9 +1,11 @@
 use crate::task::{Task, TaskData, TaskId};
 use embed::collections::{QueueDb, QueueEvent, SortedSetDb};
-use embed::{Env, EnvironmentBuilder, EnvironmentFlags, Manager, Result, Store, Transaction};
+use embed::{Env, EnvironmentBuilder, EnvironmentFlags, Result, RwTxn, Store, Transaction};
 use std::sync::Arc;
 
 pub use embed::Error as RepoError;
+
+type Token = uuid::Uuid;
 
 #[derive(Debug)]
 pub struct RepoBuilder {
@@ -23,7 +25,7 @@ impl RepoBuilder {
   {
     self.env_builder.set_flags(self.env_flags);
 
-    let env = Manager::singleton()
+    let env = embed::Manager::singleton()
       .write()
       .expect("manager write guard")
       .get_or_init(self.env_builder, path)?;
@@ -80,11 +82,14 @@ impl Repository {
     RepoBuilder::default()
   }
 
-  pub async fn create(&self, data: &TaskData) -> Result<TaskId> {
+  pub async fn create(&self, data: &TaskData, token: Option<Token>) -> Result<TaskId> {
+    let mut txw = self.begin_idemp_txn(token).await?;
+
+    if let Some(bytes) = txw.recover()? {
+      return Ok(TaskId::from_bytes(bytes));
+    }
     let mut is_push = false;
     let waiting = self.queue(&data.queue, QueueGroup::Waiting);
-    let mut txw = self.env.begin_rw_txn_async().await?;
-
     let id = TaskId::new_v4();
     if data.delay > 0 {
       let score = time_to_delay(data.delay);
@@ -95,7 +100,7 @@ impl Repository {
       is_push = true;
     }
     self.tasks().put(&mut txw, id.as_bytes(), data)?;
-    txw.commit()?;
+    txw.commit_with(id.as_bytes())?;
 
     if is_push {
       waiting.publish(QueueEvent::Push).await;
@@ -248,23 +253,21 @@ impl Repository {
   fn tasks(&self) -> &Store<TaskData> {
     &self.storage.tasks
   }
+
+  async fn begin_idemp_txn<'env>(&'env self, token: Option<Token>) -> Result<RwTxn<'env>> {
+    if let Some(t) = token {
+      self.env.begin_idemp_txn(t.as_u128()).await
+    } else {
+      self.env.begin_rw_txn_async().await
+    }
+  }
 }
 
 /// Calculate the time in milliseconds at which a task should be processed.
 /// We add the current time to the given delay.
 fn time_to_delay(delay: u64) -> u64 {
-  use std::time::SystemTime;
-
-  let delay = std::time::Duration::from_millis(delay);
-  let now = SystemTime::now()
-    .duration_since(SystemTime::UNIX_EPOCH)
-    .unwrap();
-
-  if let Some(d) = now.checked_add(delay) {
-    d.as_millis() as u64
-  } else {
-    u64::MAX
-  }
+  let now = now_as_millis();
+  now.checked_add(delay).unwrap_or(u64::MAX)
 }
 
 /// Return the current time in milliseconds as u64
