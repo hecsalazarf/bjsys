@@ -32,8 +32,8 @@ impl RepoBuilder {
 
     let storage = RepoStorage {
       tasks: Store::open(&env, "tasks")?,
-      queues: QueueDb::open(&env)?,
-      sorted_sets: SortedSetDb::open(&env)?,
+      queues: QueueDb::open(&env, None)?,
+      sorted_sets: SortedSetDb::open(&env, None)?,
     };
 
     Ok(Repository {

@@ -231,12 +231,10 @@ impl QueueDb {
   /// Elements DB name.
   const ELEMENTS_DB_NAME: &'static str = "__queue_elements";
 
-  /// Open a database of queues.
-  pub fn open(env: &Environment) -> Result<Self> {
-    let db_flags = lmdb::DatabaseFlags::default();
-    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
-    let meta = env.create_db(Some(Self::META_DB_NAME), db_flags)?;
-
+  /// Open a database of queues with the given `name`. If `name` is `None`, the
+  /// default detabase is used.
+  pub fn open(env: &Environment, name: Option<&str>) -> Result<Self> {
+    let (meta, elements) = Self::create_dbs(env, name)?;
     Ok(Self { elements, meta })
   }
 
@@ -255,6 +253,24 @@ impl QueueDb {
       keys,
       subscriptions,
     }
+  }
+
+  /// Create DB's needed by a queue
+  pub(crate) fn create_dbs(env: &Environment, name: Option<&str>) -> Result<(Database, Database)> {
+    let (mt, el) = name
+      .map(|n| {
+        (
+          format!("{}_{}", Self::META_DB_NAME, n),
+          format!("{}_{}", Self::ELEMENTS_DB_NAME, n),
+        )
+      })
+      .unwrap_or((Self::META_DB_NAME.into(), Self::ELEMENTS_DB_NAME.into()));
+
+    let db_flags = lmdb::DatabaseFlags::default();
+    let meta = env.create_db(Some(&mt), db_flags)?;
+    let elements = env.create_db(Some(&el), db_flags)?;
+
+    Ok((meta, elements))
   }
 }
 
@@ -356,9 +372,24 @@ mod tests {
   use lmdb::Transaction;
 
   #[test]
+  fn default_dbs() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let db_flags = lmdb::DatabaseFlags::default();
+
+    let (mt, el) = QueueDb::create_dbs(&env, None)?;
+    assert_eq!(mt, env.create_db(Some(QueueDb::META_DB_NAME), db_flags)?);
+    assert_eq!(
+      el,
+      env.create_db(Some(QueueDb::ELEMENTS_DB_NAME), db_flags)?
+    );
+
+    Ok(())
+  }
+
+  #[test]
   fn push() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue_1 = queue_db.get("myqueue");
     let queue_2 = queue_db.get("anotherqueue");
 
@@ -390,7 +421,7 @@ mod tests {
   #[test]
   fn push_full_queue() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue = queue_db.get("myqueue");
     let mut tx = env.begin_rw_txn()?;
     queue.push(&mut tx, "X")?;
@@ -414,7 +445,7 @@ mod tests {
   #[test]
   fn pop() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue_1 = queue_db.get("myqueue_waiting");
     let queue_2 = queue_db.get("myqueue_inprocess");
 
@@ -436,7 +467,7 @@ mod tests {
   #[test]
   fn remove() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue = queue_db.get("myqueue");
     let mut tx = env.begin_rw_txn()?;
     queue.push(&mut tx, "X")?;
@@ -457,7 +488,7 @@ mod tests {
   #[test]
   fn pop_and_move() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue_1 = queue_db.get("myqueue1");
     let queue_2 = queue_db.get("myqueue2");
     let mut tx = env.begin_rw_txn()?;
@@ -480,7 +511,7 @@ mod tests {
   #[test]
   fn get() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue_1 = queue_db.get("myqueue1");
 
     let mut tx = env.begin_rw_txn()?;
@@ -499,7 +530,7 @@ mod tests {
   #[tokio::test]
   async fn pub_sub() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let queue_db = QueueDb::open(&env)?;
+    let queue_db = QueueDb::open(&env, None)?;
     let queue_1 = queue_db.get("myqueue1");
     let mut subscriber = queue_1.subscribe().await;
 

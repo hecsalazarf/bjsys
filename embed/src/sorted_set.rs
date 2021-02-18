@@ -243,17 +243,11 @@ impl SortedSetDb {
   const SKIPLIST_DB_NAME: &'static str = "__sorted_set_skiplist";
   /// Members DB name.
   const ELEMENTS_DB_NAME: &'static str = "__sorted_set_elements";
-  
-  // Open a database of sorted sets..
-  pub fn open(env: &Environment) -> Result<Self> {
-    let db_flags = lmdb::DatabaseFlags::default();
-    let skiplist = env.create_db(Some(Self::SKIPLIST_DB_NAME), db_flags)?;
-    let elements = env.create_db(Some(Self::ELEMENTS_DB_NAME), db_flags)?;
-
-    Ok(Self {
-      skiplist,
-      elements,
-    })
+  /// Open a database of sorted sets with the given `name`. If `name` is `None`, the
+  /// default detabase is used.
+  pub fn open(env: &Environment, name: Option<&str>) -> Result<Self> {
+    let (skiplist, elements) = Self::create_dbs(env, name)?;
+    Ok(Self { skiplist, elements })
   }
 
   /// Get the sorted set with the specified key.
@@ -261,12 +255,30 @@ impl SortedSetDb {
     let skiplist = self.skiplist;
     let elements = self.elements;
     let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref());
-    
+
     SortedSet {
       skiplist,
       elements,
       uuid,
     }
+  }
+
+  /// Create DB's needed by a sorted set
+  pub(crate) fn create_dbs(env: &Environment, name: Option<&str>) -> Result<(Database, Database)> {
+    let (sl, el) = name
+      .map(|n| {
+        (
+          format!("{}_{}", Self::SKIPLIST_DB_NAME, n),
+          format!("{}_{}", Self::ELEMENTS_DB_NAME, n),
+        )
+      })
+      .unwrap_or((Self::SKIPLIST_DB_NAME.into(), Self::ELEMENTS_DB_NAME.into()));
+
+    let db_flags = lmdb::DatabaseFlags::default();
+    let skiplist = env.create_db(Some(&sl), db_flags)?;
+    let elements = env.create_db(Some(&el), db_flags)?;
+
+    Ok((skiplist, elements))
   }
 }
 
@@ -277,9 +289,27 @@ mod tests {
   use lmdb::Cursor;
 
   #[test]
+  fn default_dbs() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let db_flags = lmdb::DatabaseFlags::default();
+
+    let (sl, el) = SortedSetDb::create_dbs(&env, None)?;
+    assert_eq!(
+      sl,
+      env.create_db(Some(SortedSetDb::SKIPLIST_DB_NAME), db_flags)?
+    );
+    assert_eq!(
+      el,
+      env.create_db(Some(SortedSetDb::ELEMENTS_DB_NAME), db_flags)?
+    );
+
+    Ok(())
+  }
+
+  #[test]
   fn range_by_score() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
+    let set_db = SortedSetDb::open(&env, None)?;
     let set_a = set_db.get("set_a");
 
     // Add to set
@@ -323,7 +353,7 @@ mod tests {
     const UUID_B: [u8; 16] = [0xff; 16];
 
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
+    let set_db = SortedSetDb::open(&env, None)?;
     let mut set_a = set_db.get("set_a");
     let mut set_b = set_db.get("set_b");
     // Intentionally change uuid to test edge case
@@ -354,8 +384,8 @@ mod tests {
   #[test]
   fn unique_member() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
-    let set_a = set_db.get( "set_a");
+    let set_db = SortedSetDb::open(&env, None)?;
+    let set_a = set_db.get("set_a");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Elephant")?;
     // Update the same member with a different score
@@ -373,7 +403,7 @@ mod tests {
   #[test]
   fn same_score_diff_member() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
+    let set_db = SortedSetDb::open(&env, None)?;
     let set_a = set_db.get("set_a");
     let mut tx = env.begin_rw_txn().expect("rw txn");
     set_a.add(&mut tx, 100, "Asian Elephant")?;
@@ -393,7 +423,7 @@ mod tests {
   #[test]
   fn remove_element() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
+    let set_db = SortedSetDb::open(&env, None)?;
     let set_a = set_db.get("set_a");
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
@@ -406,7 +436,7 @@ mod tests {
   #[test]
   fn remove_range_by_score() -> Result<()> {
     let (_tmpdir, env) = create_env()?;
-    let set_db = SortedSetDb::open(&env)?;
+    let set_db = SortedSetDb::open(&env, None)?;
     let set_a = set_db.get("set_a");
 
     let mut tx = env.begin_rw_txn().expect("rw txn");
