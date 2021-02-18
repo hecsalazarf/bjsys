@@ -53,6 +53,7 @@ impl Manager {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_utils::default_env_builder;
 
   #[test]
   fn get_or_init() -> Result<()> {
@@ -65,7 +66,7 @@ mod tests {
     for _ in 0..3 {
       // Call get_or_init 3 times
       let mut manager = singleton.write().unwrap();
-      manager.get_or_init(lmdb::Environment::new(), tmp_dir.path())?;
+      manager.get_or_init(default_env_builder(), tmp_dir.path())?;
     }
     let manager = singleton.read().unwrap();
     // Only one environment created
