@@ -172,6 +172,43 @@ mod tests {
   use lmdb::{DatabaseFlags, WriteFlags};
 
   #[tokio::test]
+  async fn no_tls() -> Result<()> {
+    use lmdb::Transaction;
+    use std::time::Duration;
+    // THIS TEST MUST FAIL WHEN NO_TLS IS DISABLED FOR THE ENVIRONMENT
+    // See https://github.com/hecsalazarf/bjsys/issues/52 for more info.
+
+    // create_env() automatically inserts NO_TLS
+    let (_tmpdir, raw_env) = create_env()?;
+    let ops_db = raw_env.create_db(Some("ops"), DatabaseFlags::default())?;
+    let env = Env::new(raw_env, ops_db);
+
+    let db = env.create_db(Some("hello"), DatabaseFlags::default())?;
+    let mut txw = env.begin_rw_txn_async().await?;
+    txw.put(db, &"hello", b"world", WriteFlags::default())?;
+    txw.commit()?;
+
+    let env2 = env.clone();
+    let handler = tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      let tx2 = env2.begin_ro_txn().expect("ro txn");
+      assert_eq!(Ok(&b"world"[..]), tx2.get(db, &"hello"));
+      tokio::time::sleep(Duration::from_millis(300)).await;
+    });
+
+    let mut txw = env.begin_rw_txn_async().await?;
+    txw.put(db, &"hello", b"friend", WriteFlags::default())?;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    txw.commit()?;
+    // If NO_TLS enabled, here the transaction will fail since the spawned tokio
+    // task runs on the same OS thread, and such task still locks the slot table.
+    let tx1 = env.begin_ro_txn()?;
+    assert_eq!(Ok(&b"friend"[..]), tx1.get(db, &"hello"));
+    handler.await.unwrap();
+    Ok(())
+  }
+
+  #[tokio::test]
   async fn rw_txn_async() -> Result<()> {
     let (_tmpdir, raw_env) = create_env()?;
     let ops_db = raw_env.create_db(Some("ops"), DatabaseFlags::default())?;

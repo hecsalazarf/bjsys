@@ -48,6 +48,7 @@ impl Default for RepoBuilder {
     let mut env_flags = EnvironmentFlags::empty();
     env_flags.insert(EnvironmentFlags::NO_SYNC);
     env_flags.insert(EnvironmentFlags::NO_SUB_DIR);
+    env_flags.insert(EnvironmentFlags::NO_TLS);
     let mut env_builder = embed::Environment::new();
 
     env_builder
