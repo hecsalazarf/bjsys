@@ -27,6 +27,15 @@ impl SortedSet {
   /// Prefix length UUID + SCORE.
   const PREFIX_LEN_UUID: usize = Self::UUID_LEN + Self::SCORE_LEN;
 
+  /// Create a new sorted set.
+  pub(crate) fn new(skiplist: Database, elements: Database, uuid: Option<Uuid>) -> Self {
+    Self {
+      skiplist,
+      elements,
+      uuid,
+    }
+  }
+
   /// Add one element with the specified score. If specified element is already
   /// a member of the sorted set, the score is updated and the element reinserted
   /// at the right position to ensure the correct ordering.
@@ -113,6 +122,22 @@ impl SortedSet {
     }
     txn.commit()?;
     Ok(removed)
+  }
+
+  /// Returns the score associated with the specified element at `val` in the sorted set.
+  /// If the element does not exist, `None` is returned.
+  pub fn score<T, V>(&self, txn: &T, val: V) -> Result<Option<u64>>
+  where
+    T: Transaction,
+    V: AsRef<[u8]>,
+  {
+    let encoded_element = self.encode_elements_key(val.as_ref());
+    let element = txn.get_opt(self.elements, encoded_element)?;
+    Ok(element.map(|el| {
+      use std::convert::TryInto;
+      let score: [u8; Self::SCORE_LEN] = el.try_into().expect("score as array");
+      u64::from_be_bytes(score)
+    }))
   }
 
   fn encode_elements_key(&self, val: &[u8]) -> Vec<u8> {
@@ -307,11 +332,7 @@ impl SortedSetDb {
     let elements = self.elements;
     let uuid = Some(Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_ref()));
 
-    SortedSet {
-      skiplist,
-      elements,
-      uuid,
-    }
+    SortedSet::new(skiplist, elements, uuid)
   }
 
   /// Create DB's needed by a sorted set
@@ -510,6 +531,24 @@ mod tests {
     let tx = tx.reset().renew()?;
     let mut iter = tx.open_ro_cursor(set_a.skiplist)?.iter_start();
     assert_eq!(None, iter.next());
+    Ok(())
+  }
+
+  #[test]
+  fn score() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let set_db = SortedSetDb::open(&env, None)?;
+    let set_a = set_db.get("set_a");
+    let txn = env.begin_ro_txn()?;
+    assert_eq!(Ok(None), set_a.score(&txn, "Popocatepetl"));
+
+    let mut txn = env.begin_rw_txn()?;
+    set_a.add(&mut txn, 5_426, "Popocatepetl")?;
+    set_a.add(&mut txn, 5_230, "Iztaccihuatl")?;
+    txn.commit()?;
+
+    let txn = env.begin_ro_txn()?;
+    assert_eq!(Ok(Some(5_426)), set_a.score(&txn, "Popocatepetl"));
     Ok(())
   }
 }
