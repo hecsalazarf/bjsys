@@ -1,5 +1,5 @@
 //! A queue with persitent storage.
-use crate::extension::{TransactionExt, TransactionRwExt};
+use crate::transaction::{TransactionExt, TransactionRwExt};
 use lmdb::{
   Cursor, Database, Environment, Error, Iter, Result, RwTransaction, Transaction, WriteFlags,
 };

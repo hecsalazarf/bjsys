@@ -1,8 +1,8 @@
-use crate::collections::SortedSet;
-use lmdb::{sys, Database, Environment, Result, RwTransaction, Transaction};
-use std::ops::{Deref, DerefMut};
+use crate::transaction::{RwTxn, TxnStorage};
+use lmdb::{Environment, Result};
+use std::ops::Deref;
 use std::sync::Arc;
-use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::sync::Semaphore;
 
 /// A thread-safe LMDB environment protected by an `Arc`.
 ///
@@ -75,169 +75,19 @@ impl EnvInner {
       None
     };
 
-    Ok(RwTxn {
-      txn,
-      permit,
-      id,
-      store,
-    })
+    Ok(RwTxn::new(permit, txn, id, store))
   }
-}
-
-/// An LMDB read-write transaction that is created asynchronously and can be
-/// idempotent.
-///
-/// `RwTxn` implements `Deref<Target = RwTransaction>`.
-#[derive(Debug)]
-pub struct RwTxn<'env> {
-  permit: SemaphorePermit<'env>,
-  txn: RwTransaction<'env>,
-  id: Option<u128>,
-  store: Option<&'env TxnStorage>,
-}
-
-impl<'env> Transaction for RwTxn<'env> {
-  fn txn(&self) -> *mut sys::MDB_txn {
-    self.txn.txn()
-  }
-
-  fn commit(self) -> Result<()> {
-    self.commit_with(&())
-  }
-
-  fn abort(self) {
-    // Explicitly abort the transaction so that the permit destructor
-    // is invoked and no deadlocks occur.
-    self.txn.abort()
-  }
-}
-
-impl<'env> Deref for RwTxn<'env> {
-  type Target = RwTransaction<'env>;
-
-  fn deref(&self) -> &Self::Target {
-    &self.txn
-  }
-}
-
-impl<'env> DerefMut for RwTxn<'env> {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.txn
-  }
-}
-
-impl<'env> RwTxn<'env> {
-  /// Gets the result of an idempotent transaction. The result can be `None`
-  /// if either the transaction is not idempotent or the transaction is
-  /// idempotent but has not been commited earlier.
-  pub fn recover<D>(&'env self) -> Result<Option<D>>
-  where
-    D: serde::Deserialize<'env>,
-  {
-    if let Some(id) = self.id {
-      return self.store.unwrap().retrieve(&self.txn, id);
-    }
-
-    Ok(None)
-  }
-
-  /// Commits an idempotent transaction, storing `val` as the result of the
-  /// operation. If the transaction was previously commited, the operation
-  /// aborts.
-  ///
-  /// # Note
-  /// If the trasaction is not idempotent, `val` is ignored and the operation
-  /// is committed as usual.
-  pub fn commit_with<D: ?Sized>(self, val: &D) -> Result<()>
-  where
-    D: serde::Serialize,
-  {
-    let mut txn = self.txn;
-    if let Some(id) = self.id {
-      let store = self.store.unwrap();
-      if store.contains(&txn, id)? {
-        return Ok(());
-      }
-      store.insert(&mut txn, id, val)?;
-    }
-
-    txn.commit()
-  }
-}
-
-/// Storage for idempotent transactions. It provides functions to store, retrieve
-/// and delete idempotent transactions.
-#[derive(Debug)]
-struct TxnStorage {
-  ops: Database,
-  ops_set: SortedSet,
-}
-
-impl TxnStorage {
-  /// Opens the transaction storage attached to the environament.
-  fn open(env: &Environment) -> Result<Self> {
-    use crate::collections::SortedSetDb;
-    use lmdb::DatabaseFlags;
-
-    let (skiplist, elements) = SortedSetDb::create_dbs(env, Some("ops"))?;
-    let ops_set = SortedSet::new(skiplist, elements, None);
-    let ops = env.create_db(Some("__ops"), DatabaseFlags::default())?;
-
-    Ok(Self { ops, ops_set })
-  }
-
-  /// Inserts a new idempotent transaction with the provided data. If the transaction
-  /// exists, then it is overwritten.
-  fn insert<D: ?Sized>(&self, txn: &mut RwTransaction, id: u128, data: &D) -> Result<()>
-  where
-    D: serde::Serialize,
-  {
-    use crate::extension::TransactionRwExt;
-
-    let key = id.to_be_bytes();
-    self.ops_set.add(txn, now_as_millis(), &key)?;
-    txn.put_data(self.ops, &key, data, lmdb::WriteFlags::default())
-  }
-
-  /// Retrieves the response of the transaction `id`.
-  fn retrieve<'env, T, D>(&self, txn: &'env T, id: u128) -> Result<Option<D>>
-  where
-    D: serde::Deserialize<'env>,
-    T: Transaction,
-  {
-    use crate::extension::TransactionExt;
-    txn.get_data(self.ops, id.to_be_bytes())
-  }
-
-  /// Returns `true` if the transacion exists for the specified `id`.
-  fn contains<'env, T>(&self, txn: &'env T, id: u128) -> Result<bool>
-  where
-    T: Transaction,
-  {
-    use crate::extension::TransactionExt;
-    Ok(txn.get_opt(self.ops, id.to_be_bytes())?.is_some())
-  }
-}
-
-/// Return the current time in milliseconds as u64
-fn now_as_millis() -> u64 {
-  use std::time::SystemTime;
-
-  SystemTime::now()
-    .duration_since(SystemTime::UNIX_EPOCH)
-    .unwrap()
-    .as_millis() as u64
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::test_utils::{create_env, utf8_to_str};
+  use lmdb::Transaction;
   use lmdb::{DatabaseFlags, WriteFlags};
 
   #[tokio::test]
   async fn no_tls() -> Result<()> {
-    use lmdb::Transaction;
     use std::time::Duration;
     // THIS TEST MUST FAIL WHEN NO_TLS IS DISABLED FOR THE ENVIRONMENT
     // See https://github.com/hecsalazarf/bjsys/issues/52 for more info.

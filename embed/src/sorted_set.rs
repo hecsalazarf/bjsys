@@ -1,5 +1,5 @@
 //! A sorted set with persistent storage.
-use crate::extension::TransactionExt;
+use crate::transaction::TransactionExt;
 use lmdb::{Database, Environment, Iter, Result, RwTransaction, Transaction};
 use std::ops::{Bound, RangeBounds};
 use uuid::Uuid;
