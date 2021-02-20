@@ -1,3 +1,4 @@
+use crate::collections::SortedSet;
 use lmdb::{sys, Database, Environment, Result, RwTransaction, Transaction};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -14,10 +15,11 @@ pub struct Env {
 }
 
 impl Env {
-  pub(crate) fn new(environment: Environment, ops: Database) -> Self {
-    Self {
-      inner: Arc::new(EnvInner::new(environment, ops)),
-    }
+  pub(crate) fn open(environment: Environment) -> Result<Self> {
+    let txn_storage = TxnStorage::open(&environment)?;
+    Ok(Self {
+      inner: Arc::new(EnvInner::new(environment, txn_storage)),
+    })
   }
 
   /// Asynchronously creates a read-write transaction for use with the environment. This method
@@ -52,28 +54,32 @@ impl Deref for Env {
 struct EnvInner {
   environment: Environment,
   semaphore: Semaphore,
-  ops: Database,
+  txn_store: TxnStorage,
 }
 
 impl EnvInner {
-  fn new(environment: Environment, ops: Database) -> Self {
+  fn new(environment: Environment, txn_store: TxnStorage) -> Self {
     Self {
       environment,
       semaphore: Semaphore::new(1),
-      ops,
+      txn_store,
     }
   }
 
   async fn begin_rw_txn<'env>(&'env self, id: Option<u128>) -> Result<RwTxn<'env>> {
     let permit = self.semaphore.acquire().await.expect("acquire permit");
     let txn = self.environment.begin_rw_txn()?;
-    let ops = if id.is_some() { Some(self.ops) } else { None };
+    let store = if id.is_some() {
+      Some(&self.txn_store)
+    } else {
+      None
+    };
 
     Ok(RwTxn {
       txn,
       permit,
       id,
-      ops,
+      store,
     })
   }
 }
@@ -87,7 +93,7 @@ pub struct RwTxn<'env> {
   permit: SemaphorePermit<'env>,
   txn: RwTransaction<'env>,
   id: Option<u128>,
-  ops: Option<Database>,
+  store: Option<&'env TxnStorage>,
 }
 
 impl<'env> Transaction for RwTxn<'env> {
@@ -128,9 +134,8 @@ impl<'env> RwTxn<'env> {
   where
     D: serde::Deserialize<'env>,
   {
-    use crate::extension::TransactionExt;
     if let Some(id) = self.id {
-      return self.txn.get_data(self.ops.unwrap(), id.to_be_bytes());
+      return self.store.unwrap().retrieve(&self.txn, id);
     }
 
     Ok(None)
@@ -147,22 +152,81 @@ impl<'env> RwTxn<'env> {
   where
     D: serde::Serialize,
   {
-    use crate::extension::{TransactionExt, TransactionRwExt};
-    use lmdb::WriteFlags;
-
     let mut txn = self.txn;
     if let Some(id) = self.id {
-      let key = id.to_be_bytes();
-      let ops = self.ops.unwrap();
-
-      if txn.get_opt(ops, &key)?.is_some() {
+      let store = self.store.unwrap();
+      if store.contains(&txn, id)? {
         return Ok(());
       }
-      txn.put_data(ops, key, val, WriteFlags::default())?;
+      store.insert(&mut txn, id, val)?;
     }
 
     txn.commit()
   }
+}
+
+/// Storage for idempotent transactions. It provides functions to store, retrieve
+/// and delete idempotent transactions.
+#[derive(Debug)]
+struct TxnStorage {
+  ops: Database,
+  ops_set: SortedSet,
+}
+
+impl TxnStorage {
+  /// Opens the transaction storage attached to the environament.
+  fn open(env: &Environment) -> Result<Self> {
+    use crate::collections::SortedSetDb;
+    use lmdb::DatabaseFlags;
+
+    let (skiplist, elements) = SortedSetDb::create_dbs(env, Some("ops"))?;
+    let ops_set = SortedSet::new(skiplist, elements, None);
+    let ops = env.create_db(Some("__ops"), DatabaseFlags::default())?;
+
+    Ok(Self { ops, ops_set })
+  }
+
+  /// Inserts a new idempotent transaction with the provided data. If the transaction
+  /// exists, then it is overwritten.
+  fn insert<D: ?Sized>(&self, txn: &mut RwTransaction, id: u128, data: &D) -> Result<()>
+  where
+    D: serde::Serialize,
+  {
+    use crate::extension::TransactionRwExt;
+
+    let key = id.to_be_bytes();
+    self.ops_set.add(txn, now_as_millis(), &key)?;
+    txn.put_data(self.ops, &key, data, lmdb::WriteFlags::default())
+  }
+
+  /// Retrieves the response of the transaction `id`.
+  fn retrieve<'env, T, D>(&self, txn: &'env T, id: u128) -> Result<Option<D>>
+  where
+    D: serde::Deserialize<'env>,
+    T: Transaction,
+  {
+    use crate::extension::TransactionExt;
+    txn.get_data(self.ops, id.to_be_bytes())
+  }
+
+  /// Returns `true` if the transacion exists for the specified `id`.
+  fn contains<'env, T>(&self, txn: &'env T, id: u128) -> Result<bool>
+  where
+    T: Transaction,
+  {
+    use crate::extension::TransactionExt;
+    Ok(txn.get_opt(self.ops, id.to_be_bytes())?.is_some())
+  }
+}
+
+/// Return the current time in milliseconds as u64
+fn now_as_millis() -> u64 {
+  use std::time::SystemTime;
+
+  SystemTime::now()
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .unwrap()
+    .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -180,8 +244,7 @@ mod tests {
 
     // create_env() automatically inserts NO_TLS
     let (_tmpdir, raw_env) = create_env()?;
-    let ops_db = raw_env.create_db(Some("ops"), DatabaseFlags::default())?;
-    let env = Env::new(raw_env, ops_db);
+    let env = Env::open(raw_env)?;
 
     let db = env.create_db(Some("hello"), DatabaseFlags::default())?;
     let mut txw = env.begin_rw_txn_async().await?;
@@ -200,8 +263,8 @@ mod tests {
     txw.put(db, &"hello", b"friend", WriteFlags::default())?;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     txw.commit()?;
-    // If NO_TLS enabled, here the transaction will fail since the spawned tokio
-    // task runs on the same OS thread, and such task still locks the slot table.
+    // If NO_TLS disabled, here the transaction will fail since the spawned tokio
+    // task runs on the same OS thread, and such task still locks the table slot.
     let tx1 = env.begin_ro_txn()?;
     assert_eq!(Ok(&b"friend"[..]), tx1.get(db, &"hello"));
     handler.await.unwrap();
@@ -211,8 +274,7 @@ mod tests {
   #[tokio::test]
   async fn rw_txn_async() -> Result<()> {
     let (_tmpdir, raw_env) = create_env()?;
-    let ops_db = raw_env.create_db(Some("ops"), DatabaseFlags::default())?;
-    let env_1 = Env::new(raw_env, ops_db);
+    let env_1 = Env::open(raw_env)?;
     let db = env_1.create_db(Some("test_db"), DatabaseFlags::empty())?;
     let env_2 = env_1.clone();
 
@@ -234,10 +296,9 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn rw_idemp_txn() -> Result<()> {
+  async fn create_idemp_txn() -> Result<()> {
     let (_tmpdir, raw_env) = create_env()?;
-    let ops_db = raw_env.create_db(Some("ops"), DatabaseFlags::default())?;
-    let env_1 = Env::new(raw_env, ops_db);
+    let env_1 = Env::open(raw_env)?;
     let db = env_1.create_db(Some("test_db"), DatabaseFlags::empty())?;
 
     let mut txn = env_1.begin_idemp_txn(1).await?;

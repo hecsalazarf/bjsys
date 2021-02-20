@@ -1,5 +1,5 @@
 use crate::environment::Env;
-use lmdb::{EnvironmentBuilder as Builder, Result, DatabaseFlags};
+use lmdb::{EnvironmentBuilder as Builder, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Once, RwLock};
@@ -41,9 +41,7 @@ impl Manager {
       return Ok(env.clone());
     }
 
-    let env = builder.open(path)?;
-    let txns = env.create_db(Some("__ops"), DatabaseFlags::default())?;
-    let env = Env::new(env, txns);
+    let env = Env::open(builder.open(path)?)?;
     self.envs.insert(path.into(), env.clone());
 
     Ok(env)
