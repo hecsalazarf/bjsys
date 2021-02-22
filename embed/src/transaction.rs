@@ -246,3 +246,77 @@ fn now_as_millis() -> u64 {
     .unwrap()
     .as_millis() as u64
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::{create_env, utf8_to_str};
+  use crate::Env;
+  use lmdb::{DatabaseFlags, WriteFlags};
+
+  #[tokio::test]
+  async fn rw_txn_async() -> Result<()> {
+    let (_tmpdir, raw_env) = create_env()?;
+    let env_1 = Env::open(raw_env)?;
+    let db = env_1.create_db(Some("test_db"), DatabaseFlags::empty())?;
+    let env_2 = env_1.clone();
+
+    let join = tokio::spawn(async move {
+      let mut txn = env_2.begin_rw_txn_async().await.unwrap();
+      txn.put(db, &"A", &"letter A", WriteFlags::empty()).unwrap();
+      txn.commit().unwrap();
+    });
+
+    let mut txn = env_1.begin_rw_txn_async().await?;
+    txn.put(db, &"B", &"letter B", WriteFlags::empty())?;
+    txn.commit()?;
+    join.await.unwrap();
+
+    let txn = env_1.begin_ro_txn()?;
+    assert_eq!(Ok("letter A"), utf8_to_str(txn.get(db, &"A")));
+    assert_eq!(Ok("letter B"), utf8_to_str(txn.get(db, &"B")));
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn idempotent_txn() -> Result<()> {
+    let (_tmpdir, raw_env) = create_env()?;
+    let env_1 = Env::open(raw_env)?;
+    let db = env_1.create_db(Some("test_db"), DatabaseFlags::empty())?;
+
+    let mut txn = env_1.begin_idemp_txn(1).await?;
+    assert_eq!(Ok(None), txn.recover::<()>());
+    txn.put(db, &"B", &"letter B", WriteFlags::empty())?;
+    txn.commit_with("B was saved")?;
+
+    let mut txn = env_1.begin_idemp_txn(1).await?;
+    assert_eq!(Ok(Some("B was saved")), txn.recover());
+    txn.put(db, &"B", &"another letter B", WriteFlags::empty())?;
+    txn.commit()?;
+
+    let txn = env_1.begin_idemp_txn(1).await?;
+    assert_eq!(Ok("letter B"), utf8_to_str(txn.get(db, &"B")));
+    txn.abort();
+    Ok(())
+  }
+
+  #[test]
+  fn txn_storage() -> Result<()> {
+    let (_tmpdir, env) = create_env()?;
+    let store = TxnStorage::open(&env)?;
+
+    let mut txn = env.begin_rw_txn()?;
+    store.insert(&mut txn, 1, "txn1")?;
+    store.insert(&mut txn, 2, "txn2")?;
+    txn.commit()?;
+
+    let txn = env.begin_ro_txn()?;
+    assert_eq!(Ok(Some("txn1")), store.retrieve(&txn, 1));
+    assert_eq!(Ok(Some("txn2")), store.retrieve(&txn, 2));
+    assert_eq!(Ok(true), store.contains(&txn, 1));
+    assert_eq!(Ok(true), store.contains(&txn, 2));
+    assert_eq!(Ok(false), store.contains(&txn, 3));
+
+    Ok(())
+  }
+}
