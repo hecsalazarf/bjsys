@@ -146,6 +146,25 @@ impl TxnStorage {
   {
     Ok(txn.get_opt(self.ops, id.to_be_bytes())?.is_some())
   }
+
+  /// Cleans the transaction history within `range`, where `range` is specified as milliseconds
+  /// of the time the transaction was created. The returned value is the number of transactions
+  /// removed.
+  pub fn _clean_by_range<'env, R>(&self, txn: &mut RwTransaction, range: R) -> Result<usize>
+  where
+    R: std::ops::RangeBounds<u64>,
+  {
+    let mut txn = txn.begin_nested_txn()?;
+    let mut iter = self.ops_set.range_by_score(&mut txn, range)?;
+    let mut count = 0;
+    while let Some(val) = iter.next().transpose()? {
+      self.ops_set.remove(&mut txn, val)?;
+      txn.del(self.ops, &val, None)?;
+      count += 1;
+    }
+    txn.commit()?;
+    Ok(count)
+  }
 }
 
 /// An automatically-implemented extension trait on `Transaction` providing
@@ -306,16 +325,36 @@ mod tests {
     let store = TxnStorage::open(&env)?;
 
     let mut txn = env.begin_rw_txn()?;
-    store.insert(&mut txn, 1, "txn1")?;
-    store.insert(&mut txn, 2, "txn2")?;
+    let mut now = now_as_millis();
+    for i in 0..10 {
+      store.insert(&mut txn, i, &format!("txn{}", i))?;
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    txn.commit()?;
+    now += 50; // Adds 50 milliseconds
+
+    let txn = env.begin_ro_txn()?;
+    for i in 0..10 {
+      let val = format!("txn{}", i);
+      assert_eq!(Ok(Some(val)), store.retrieve(&txn, i));
+      assert_eq!(Ok(true), store.contains(&txn, i))
+    }
+    txn.abort();
+
+    let mut txn = env.begin_rw_txn()?;
+    assert_eq!(Ok(5), store._clean_by_range(&mut txn, 0..now));
     txn.commit()?;
 
     let txn = env.begin_ro_txn()?;
-    assert_eq!(Ok(Some("txn1")), store.retrieve(&txn, 1));
-    assert_eq!(Ok(Some("txn2")), store.retrieve(&txn, 2));
-    assert_eq!(Ok(true), store.contains(&txn, 1));
-    assert_eq!(Ok(true), store.contains(&txn, 2));
-    assert_eq!(Ok(false), store.contains(&txn, 3));
+    for i in 0..10 {
+      if i < 5 {
+        assert_eq!(Ok(false), store.contains(&txn, i))
+      } else {
+        let val = format!("txn{}", i);
+        assert_eq!(Ok(Some(val)), store.retrieve(&txn, i))
+      }
+    }
+    txn.abort();
 
     Ok(())
   }
